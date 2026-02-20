@@ -1,14 +1,19 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
-// Select removed - Instagram always uses hashtag scraper for keyword extraction
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Table,
   TableBody,
@@ -26,9 +31,11 @@ import {
   ChevronRight,
   Settings,
   PlayCircle,
+  AlertCircle,
 } from "lucide-react";
 import { toast } from "sonner";
 import type { Tables } from "@/types/database";
+import { PLATFORMS } from "@/types/platform";
 import { useRealtime } from "@/hooks/use-realtime";
 
 type ExtractionJob = Tables<"extraction_jobs">;
@@ -52,16 +59,14 @@ const PLATFORM_COLORS: Record<string, string> = {
 };
 
 // Tagged extraction is only supported on Instagram currently
-const TAGGED_PLATFORMS = ["instagram"] as const;
+const TAGGED_SUPPORTED_PLATFORMS = ["instagram"];
 
 interface ExtractionConfig {
   limit: number;
   selectedPlatforms: string[];
 }
 
-export default function ExtractPage() {
-  const params = useParams();
-  const campaignId = params.id as string;
+export default function MasterExtractPage() {
   const supabase = createClient();
 
   const [jobs, setJobs] = useState<ExtractionJob[]>([]);
@@ -70,18 +75,17 @@ export default function ExtractPage() {
   const [loading, setLoading] = useState(true);
   const [extracting, setExtracting] = useState<string | null>(null);
   const [extractingAll, setExtractingAll] = useState<"keyword" | "tagged" | null>(null);
+  const [platformFilter, setPlatformFilter] = useState<string>("all");
+
+  // Global platform selection for keyword extraction
+  const [globalPlatforms, setGlobalPlatforms] = useState<string[]>(["instagram"]);
 
   // Per-source advanced settings
   const [expandedSettings, setExpandedSettings] = useState<Record<string, boolean>>({});
   const [configs, setConfigs] = useState<Record<string, ExtractionConfig>>({});
 
-  // Global platform selection for keywords
-  const [globalPlatforms, setGlobalPlatforms] = useState<string[]>(["instagram"]);
-
   // Polling refs
   const pollingIntervals = useRef<Record<string, ReturnType<typeof setInterval>>>({});
-
-  // Build a lookup for source names
   const keywordMap = useRef<Record<string, string>>({});
   const taggedMap = useRef<Record<string, string>>({});
 
@@ -90,33 +94,26 @@ export default function ExtractPage() {
     return () => {
       Object.values(pollingIntervals.current).forEach(clearInterval);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [campaignId]);
+  }, []);
 
   useEffect(() => {
     const kwMap: Record<string, string> = {};
-    for (const kw of keywords) {
-      kwMap[kw.id] = kw.keyword;
-    }
+    for (const kw of keywords) kwMap[kw.id] = kw.keyword;
     keywordMap.current = kwMap;
   }, [keywords]);
 
   useEffect(() => {
     const tMap: Record<string, string> = {};
-    for (const acc of taggedAccounts) {
-      tMap[acc.id] = acc.account_username;
-    }
+    for (const acc of taggedAccounts) tMap[acc.id] = acc.account_username;
     taggedMap.current = tMap;
   }, [taggedAccounts]);
 
-  // Start auto-polling for running jobs on load
   useEffect(() => {
     for (const job of jobs) {
       if ((job.status === "running" || job.status === "pending") && !pollingIntervals.current[job.id]) {
         startPolling(job.id);
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobs.length]);
 
   const handleRealtimeUpdate = useCallback(
@@ -134,41 +131,25 @@ export default function ExtractPage() {
     []
   );
 
-  useRealtime<ExtractionJob>(
-    "extraction_jobs",
-    `campaign_id=eq.${campaignId}`,
-    handleRealtimeUpdate
-  );
+  useRealtime<ExtractionJob>("extraction_jobs", undefined, handleRealtimeUpdate);
 
   function startPolling(jobId: string) {
     if (pollingIntervals.current[jobId]) return;
-
     pollingIntervals.current[jobId] = setInterval(async () => {
       try {
         const response = await fetch(`/api/extract/status?job_id=${jobId}`);
         const result = await response.json();
-
         if (result.status === "completed" || result.status === "failed") {
           stopPolling(jobId);
-
           setJobs((prev) =>
             prev.map((j) =>
               j.id === jobId
-                ? {
-                    ...j,
-                    status: result.status,
-                    total_extracted: result.total_extracted ?? j.total_extracted,
-                    new_extracted: result.new_extracted ?? j.new_extracted,
-                    completed_at: new Date().toISOString(),
-                  }
+                ? { ...j, status: result.status, total_extracted: result.total_extracted ?? j.total_extracted, new_extracted: result.new_extracted ?? j.new_extracted, completed_at: new Date().toISOString() }
                 : j
             )
           );
-
           if (result.status === "completed") {
-            toast.success(
-              `추출 완료: ${result.total_extracted ?? 0}건 (신규 ${result.new_extracted ?? 0}건)`
-            );
+            toast.success(`추출 완료: ${result.total_extracted ?? 0}건 (신규 ${result.new_extracted ?? 0}건)`);
           } else {
             toast.error(`추출 실패: ${result.error ?? "알 수 없는 오류"}`);
           }
@@ -192,10 +173,11 @@ export default function ExtractPage() {
       supabase
         .from("extraction_jobs")
         .select("*")
-        .eq("campaign_id", campaignId)
-        .order("created_at", { ascending: false }),
-      supabase.from("keywords").select("*").eq("campaign_id", campaignId),
-      supabase.from("tagged_accounts").select("*").eq("campaign_id", campaignId),
+        .is("campaign_id", null)
+        .order("created_at", { ascending: false })
+        .limit(100),
+      supabase.from("keywords").select("*").order("created_at", { ascending: false }),
+      supabase.from("tagged_accounts").select("*").order("created_at", { ascending: false }),
     ]);
 
     setJobs((jobsRes.data as ExtractionJob[]) ?? []);
@@ -216,15 +198,11 @@ export default function ExtractPage() {
   }
 
   function toggleSettings(sourceId: string) {
-    setExpandedSettings((prev) => ({
-      ...prev,
-      [sourceId]: !prev[sourceId],
-    }));
+    setExpandedSettings((prev) => ({ ...prev, [sourceId]: !prev[sourceId] }));
   }
 
-  // Get effective platforms for a source: per-source override or global
   function getEffectivePlatforms(sourceId: string, type: "keyword" | "tagged"): string[] {
-    if (type === "tagged") return [...TAGGED_PLATFORMS];
+    if (type === "tagged") return [...TAGGED_SUPPORTED_PLATFORMS];
     const config = getConfig(sourceId);
     if (config.selectedPlatforms.length > 0) return config.selectedPlatforms;
     return globalPlatforms.length > 0 ? globalPlatforms : ["instagram"];
@@ -234,7 +212,7 @@ export default function ExtractPage() {
     setGlobalPlatforms((prev) => {
       if (prev.includes(platform)) {
         const next = prev.filter((p) => p !== platform);
-        return next.length > 0 ? next : prev; // Keep at least one
+        return next.length > 0 ? next : prev;
       }
       return [...prev, platform];
     });
@@ -253,24 +231,19 @@ export default function ExtractPage() {
     }
   }
 
-  async function startExtraction(
-    type: "keyword" | "tagged",
-    sourceId: string,
-  ) {
+  async function startExtraction(type: "keyword" | "tagged", sourceId: string) {
     setExtracting(sourceId);
     const config = getConfig(sourceId);
     const platforms = getEffectivePlatforms(sourceId, type);
 
     try {
       const body: Record<string, unknown> = {
-        campaign_id: campaignId,
+        campaign_id: null,
         type,
         source_id: sourceId,
         platforms,
         limit: config.limit,
       };
-
-      // Instagram keyword extraction always uses hashtag scraper
 
       const response = await fetch("/api/extract", {
         method: "POST",
@@ -289,7 +262,6 @@ export default function ExtractPage() {
             .map((j) => PLATFORM_LABELS[j.platform] ?? j.platform)
             .join(", ");
           toast.success(`${started}개 플랫폼 추출 시작: ${platformNames}`);
-          // Start polling for each job
           for (const job of result.jobs) {
             startPolling(job.job_id);
           }
@@ -308,11 +280,12 @@ export default function ExtractPage() {
 
   async function startExtractAll(type: "keyword" | "tagged") {
     setExtractingAll(type);
-
     const items =
       type === "keyword"
-        ? keywords.map((kw) => ({ id: kw.id }))
-        : taggedAccounts.map((acc) => ({ id: acc.id }));
+        ? filteredKeywords.map((kw) => ({ id: kw.id }))
+        : filteredTagged
+            .filter((a) => TAGGED_SUPPORTED_PLATFORMS.includes(a.platform))
+            .map((acc) => ({ id: acc.id }));
 
     let totalStarted = 0;
     let totalFailed = 0;
@@ -320,17 +293,14 @@ export default function ExtractPage() {
     for (const item of items) {
       const config = getConfig(item.id);
       const platforms = getEffectivePlatforms(item.id, type);
-
       try {
         const body: Record<string, unknown> = {
-          campaign_id: campaignId,
+          campaign_id: null,
           type,
           source_id: item.id,
           platforms,
           limit: config.limit,
         };
-
-        // Instagram keyword extraction always uses hashtag scraper
 
         const response = await fetch("/api/extract", {
           method: "POST",
@@ -355,49 +325,13 @@ export default function ExtractPage() {
       }
     }
 
-    if (totalStarted > 0) {
-      toast.success(`${totalStarted}건의 추출이 시작되었습니다.`);
-    }
-    if (totalFailed > 0) {
-      toast.error(`${totalFailed}건의 추출이 실패했습니다.`);
-    }
-
+    if (totalStarted > 0) toast.success(`${totalStarted}건의 추출이 시작되었습니다.`);
+    if (totalFailed > 0) toast.error(`${totalFailed}건의 추출이 실패했습니다.`);
     setExtractingAll(null);
   }
 
-  async function checkStatus(jobId: string) {
-    try {
-      const response = await fetch(`/api/extract/status?job_id=${jobId}`);
-      const result = await response.json();
-      if (!response.ok) {
-        toast.error("상태 확인 실패: " + (result.error ?? "알 수 없는 오류"));
-      } else {
-        toast.success(
-          `상태: ${statusLabels[result.status] ?? result.status} (추출: ${result.total_extracted ?? 0}건)`
-        );
-
-        setJobs((prev) =>
-          prev.map((j) =>
-            j.id === jobId
-              ? {
-                  ...j,
-                  status: result.status,
-                  total_extracted: result.total_extracted ?? j.total_extracted,
-                  new_extracted: result.new_extracted ?? j.new_extracted,
-                }
-              : j
-          )
-        );
-      }
-    } catch {
-      toast.error("상태 확인 중 오류가 발생했습니다.");
-    }
-  }
-
   function getSourceName(job: ExtractionJob): string {
-    if (job.type === "keyword" && job.source_id) {
-      return keywordMap.current[job.source_id] ?? "키워드";
-    }
+    if (job.type === "keyword" && job.source_id) return keywordMap.current[job.source_id] ?? "키워드";
     if (job.type === "tagged" && job.source_id) {
       const username = taggedMap.current[job.source_id];
       return username ? `@${username}` : "태그";
@@ -419,23 +353,45 @@ export default function ExtractPage() {
     failed: "실패",
   };
 
-  const runningJobCount = jobs.filter(
-    (j) => j.status === "running" || j.status === "pending"
-  ).length;
+  const runningJobCount = jobs.filter((j) => j.status === "running" || j.status === "pending").length;
+
+  // Filter by platform
+  const filteredKeywords = platformFilter === "all" ? keywords : keywords.filter((kw) => kw.platform === platformFilter);
+  const filteredTagged = platformFilter === "all"
+    ? taggedAccounts
+    : taggedAccounts.filter((acc) => acc.platform === platformFilter);
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h2 className="text-xl font-bold">인플루언서 추출</h2>
-        {runningJobCount > 0 && (
-          <Badge className="bg-primary/10 text-primary" variant="secondary">
-            <Loader2 className="w-3 h-3 animate-spin mr-1" />
-            {runningJobCount}건 실행 중
-          </Badge>
-        )}
+        <div>
+          <h2 className="text-xl font-bold">인플루언서 추출</h2>
+          <p className="text-sm text-muted-foreground mt-1">
+            등록된 키워드/태그 계정으로 인플루언서를 추출합니다. 마스터데이터에 자동 반영됩니다.
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <Select value={platformFilter} onValueChange={setPlatformFilter}>
+            <SelectTrigger className="w-36">
+              <SelectValue placeholder="플랫폼" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">전체 플랫폼</SelectItem>
+              {PLATFORMS.filter((p) => p.value !== "threads").map((p) => (
+                <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {runningJobCount > 0 && (
+            <Badge className="bg-primary/10 text-primary" variant="secondary">
+              <Loader2 className="w-3 h-3 animate-spin mr-1" />
+              {runningJobCount}건 실행 중
+            </Badge>
+          )}
+        </div>
       </div>
 
-      {/* Global platform selection */}
+      {/* Global platform selection for keyword extraction */}
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base">추출 플랫폼 선택</CardTitle>
@@ -472,12 +428,12 @@ export default function ExtractPage() {
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
             <CardTitle className="text-base">키워드 기반 추출</CardTitle>
-            {keywords.length > 0 && (
+            {filteredKeywords.length > 0 && (
               <Button
                 size="sm"
                 variant="outline"
                 onClick={() => startExtractAll("keyword")}
-                disabled={extractingAll === "keyword" || keywords.length === 0}
+                disabled={extractingAll === "keyword"}
               >
                 {extractingAll === "keyword" ? (
                   <Loader2 className="w-4 h-4 animate-spin mr-1" />
@@ -489,10 +445,10 @@ export default function ExtractPage() {
             )}
           </CardHeader>
           <CardContent className="space-y-2">
-            {keywords.length === 0 ? (
+            {filteredKeywords.length === 0 ? (
               <p className="text-sm text-muted-foreground">등록된 키워드가 없습니다.</p>
             ) : (
-              keywords.map((kw) => {
+              filteredKeywords.map((kw) => {
                 const isExpanded = expandedSettings[kw.id] ?? false;
                 const config = getConfig(kw.id);
                 const effectivePlatforms = getEffectivePlatforms(kw.id, "keyword");
@@ -506,52 +462,27 @@ export default function ExtractPage() {
                             {PLATFORM_LABELS[p]}
                           </Badge>
                         ))}
-                        {kw.estimated_count && (
-                          <span className="text-xs text-muted-foreground">
-                            ~{kw.estimated_count.toLocaleString()}건
-                          </span>
+                        {kw.campaign_id && (
+                          <Badge variant="outline" className="text-[10px]">캠페인</Badge>
                         )}
                       </div>
                       <div className="flex items-center gap-1">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => toggleSettings(kw.id)}
-                          className="text-muted-foreground"
-                        >
+                        <Button variant="ghost" size="sm" onClick={() => toggleSettings(kw.id)} className="text-muted-foreground">
                           <Settings className="w-4 h-4" />
-                          {isExpanded ? (
-                            <ChevronDown className="w-3 h-3 ml-0.5" />
-                          ) : (
-                            <ChevronRight className="w-3 h-3 ml-0.5" />
-                          )}
+                          {isExpanded ? <ChevronDown className="w-3 h-3 ml-0.5" /> : <ChevronRight className="w-3 h-3 ml-0.5" />}
                         </Button>
-                        <Button
-                          size="sm"
-                          onClick={() => startExtraction("keyword", kw.id)}
-                          disabled={extracting === kw.id}
-                        >
-                          {extracting === kw.id ? (
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                          ) : (
-                            <Play className="w-4 h-4" />
-                          )}
+                        <Button size="sm" onClick={() => startExtraction("keyword", kw.id)} disabled={extracting === kw.id}>
+                          {extracting === kw.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
                         </Button>
                       </div>
                     </div>
 
-                    {/* Advanced settings */}
                     {isExpanded && (
                       <div className="px-3 pb-3 pt-0 border-t bg-muted/50 space-y-3">
-                        <p className="text-xs font-medium text-muted-foreground pt-2">
-                          고급 설정
-                        </p>
-
+                        <p className="text-xs font-medium text-muted-foreground pt-2">고급 설정</p>
                         {/* Per-keyword platform override */}
                         <div>
-                          <Label className="text-xs text-muted-foreground">
-                            플랫폼 (이 키워드만 적용)
-                          </Label>
+                          <Label className="text-xs text-muted-foreground">플랫폼 (이 키워드만 적용)</Label>
                           <div className="flex flex-wrap gap-2 mt-1">
                             {ALL_PLATFORMS.map((platform) => {
                               const isActive = effectivePlatforms.includes(platform);
@@ -559,9 +490,7 @@ export default function ExtractPage() {
                                 <label
                                   key={platform}
                                   className={`flex items-center gap-1.5 px-2 py-1 rounded border text-xs cursor-pointer ${
-                                    isActive
-                                      ? "border-primary bg-primary/5"
-                                      : "border-muted"
+                                    isActive ? "border-primary bg-primary/5" : "border-muted"
                                   }`}
                                 >
                                   <Checkbox
@@ -575,32 +504,18 @@ export default function ExtractPage() {
                             })}
                           </div>
                         </div>
-
                         <div className="flex items-center gap-4">
                           <div className="flex-1">
-                            <Label className="text-xs text-muted-foreground">
-                              추출 수량 (플랫폼당)
-                            </Label>
+                            <Label className="text-xs text-muted-foreground">추출 수량 (플랫폼당)</Label>
                             <Input
                               type="number"
                               min={1}
                               max={1000}
                               value={config.limit}
-                              onChange={(e) =>
-                                updateConfig(kw.id, {
-                                  limit: parseInt(e.target.value) || 50,
-                                })
-                              }
+                              onChange={(e) => updateConfig(kw.id, { limit: parseInt(e.target.value) || 50 })}
                               className="mt-1 h-8 text-sm"
                             />
                           </div>
-                          {effectivePlatforms.includes("instagram") && (
-                            <div className="flex-1">
-                              <p className="text-xs text-muted-foreground mt-2">
-                                Instagram: 해시태그 기반 추출
-                              </p>
-                            </div>
-                          )}
                         </div>
                         <p className="text-xs text-muted-foreground">
                           예상: {effectivePlatforms.length}개 플랫폼 x {config.limit}건 = 약 {effectivePlatforms.length * config.limit}건
@@ -618,14 +533,12 @@ export default function ExtractPage() {
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
             <CardTitle className="text-base">태그 계정 기반 추출</CardTitle>
-            {taggedAccounts.length > 0 && (
+            {filteredTagged.filter((a) => TAGGED_SUPPORTED_PLATFORMS.includes(a.platform)).length > 0 && (
               <Button
                 size="sm"
                 variant="outline"
                 onClick={() => startExtractAll("tagged")}
-                disabled={
-                  extractingAll === "tagged" || taggedAccounts.length === 0
-                }
+                disabled={extractingAll === "tagged"}
               >
                 {extractingAll === "tagged" ? (
                   <Loader2 className="w-4 h-4 animate-spin mr-1" />
@@ -637,92 +550,63 @@ export default function ExtractPage() {
             )}
           </CardHeader>
           <CardContent className="space-y-2">
-            {taggedAccounts.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                등록된 태그 계정이 없습니다.
-              </p>
+            {filteredTagged.length === 0 ? (
+              <p className="text-sm text-muted-foreground">등록된 태그 계정이 없습니다.</p>
             ) : (
               <>
                 <p className="text-xs text-muted-foreground mb-2">
                   태그 기반 추출은 현재 Instagram만 지원합니다.
                 </p>
-                {taggedAccounts.map((acc) => {
+                {filteredTagged.map((acc) => {
                   const isExpanded = expandedSettings[acc.id] ?? false;
                   const config = getConfig(acc.id);
+                  const isSupported = TAGGED_SUPPORTED_PLATFORMS.includes(acc.platform);
                   return (
                     <div key={acc.id} className="border rounded-lg">
                       <div className="flex items-center justify-between p-3">
                         <div className="flex items-center gap-2">
-                          <span className="font-medium">
-                            @{acc.account_username}
-                          </span>
-                          <Badge className={`${PLATFORM_COLORS.instagram} text-xs`} variant="secondary">
-                            Instagram
+                          <span className="font-medium">@{acc.account_username}</span>
+                          <Badge className={`${PLATFORM_COLORS[acc.platform] ?? ""} text-xs`} variant="secondary">
+                            {PLATFORM_LABELS[acc.platform] ?? acc.platform}
                           </Badge>
-                          {acc.estimated_count && (
-                            <span className="text-xs text-muted-foreground">
-                              ~{acc.estimated_count.toLocaleString()}건
+                          {!isSupported && (
+                            <span className="flex items-center gap-1 text-xs text-amber-600">
+                              <AlertCircle className="w-3 h-3" />
+                              키워드 추출만 지원
                             </span>
                           )}
                         </div>
                         <div className="flex items-center gap-1">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => toggleSettings(acc.id)}
-                            className="text-muted-foreground"
-                          >
-                            <Settings className="w-4 h-4" />
-                            {isExpanded ? (
-                              <ChevronDown className="w-3 h-3 ml-0.5" />
-                            ) : (
-                              <ChevronRight className="w-3 h-3 ml-0.5" />
-                            )}
-                          </Button>
-                          <Button
-                            size="sm"
-                            onClick={() =>
-                              startExtraction("tagged", acc.id)
-                            }
-                            disabled={extracting === acc.id}
-                          >
-                            {extracting === acc.id ? (
-                              <Loader2 className="w-4 h-4 animate-spin" />
-                            ) : (
-                              <Play className="w-4 h-4" />
-                            )}
-                          </Button>
+                          {isSupported && (
+                            <>
+                              <Button variant="ghost" size="sm" onClick={() => toggleSettings(acc.id)} className="text-muted-foreground">
+                                <Settings className="w-4 h-4" />
+                                {isExpanded ? <ChevronDown className="w-3 h-3 ml-0.5" /> : <ChevronRight className="w-3 h-3 ml-0.5" />}
+                              </Button>
+                              <Button size="sm" onClick={() => startExtraction("tagged", acc.id)} disabled={extracting === acc.id}>
+                                {extracting === acc.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+                              </Button>
+                            </>
+                          )}
                         </div>
                       </div>
 
-                      {/* Advanced settings */}
-                      {isExpanded && (
+                      {isExpanded && isSupported && (
                         <div className="px-3 pb-3 pt-0 border-t bg-muted/50 space-y-3">
-                          <p className="text-xs font-medium text-muted-foreground pt-2">
-                            고급 설정
-                          </p>
+                          <p className="text-xs font-medium text-muted-foreground pt-2">고급 설정</p>
                           <div className="flex items-center gap-4">
                             <div className="flex-1">
-                              <Label className="text-xs text-muted-foreground">
-                                추출 수량
-                              </Label>
+                              <Label className="text-xs text-muted-foreground">추출 수량</Label>
                               <Input
                                 type="number"
                                 min={1}
                                 max={1000}
                                 value={config.limit}
-                                onChange={(e) =>
-                                  updateConfig(acc.id, {
-                                    limit: parseInt(e.target.value) || 50,
-                                  })
-                                }
+                                onChange={(e) => updateConfig(acc.id, { limit: parseInt(e.target.value) || 50 })}
                                 className="mt-1 h-8 text-sm"
                               />
                             </div>
                           </div>
-                          <p className="text-xs text-muted-foreground">
-                            예상 추출 수: 약 {config.limit}건
-                          </p>
                         </div>
                       )}
                     </div>
@@ -753,53 +637,38 @@ export default function ExtractPage() {
                 <TableHead>전체</TableHead>
                 <TableHead>신규</TableHead>
                 <TableHead>시작일</TableHead>
-                <TableHead className="w-16" />
               </TableRow>
             </TableHeader>
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell
-                    colSpan={8}
-                    className="text-center py-8 text-muted-foreground"
-                  >
+                  <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
                     <Loader2 className="w-5 h-5 animate-spin mx-auto mb-1" />
                     로딩 중...
                   </TableCell>
                 </TableRow>
               ) : jobs.length === 0 ? (
                 <TableRow>
-                  <TableCell
-                    colSpan={8}
-                    className="text-center py-8 text-muted-foreground"
-                  >
+                  <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
                     추출 작업이 없습니다. 위에서 플랫폼을 선택하고 추출을 시작하세요.
                   </TableCell>
                 </TableRow>
               ) : (
                 jobs.map((job) => (
                   <TableRow key={job.id}>
+                    <TableCell>{job.type === "keyword" ? "키워드" : "태그"}</TableCell>
+                    <TableCell className="font-medium text-sm">{getSourceName(job)}</TableCell>
                     <TableCell>
-                      {job.type === "keyword" ? "키워드" : "태그"}
-                    </TableCell>
-                    <TableCell className="font-medium text-sm">
-                      {getSourceName(job)}
-                    </TableCell>
-                    <TableCell>
-                      <Badge className={`${PLATFORM_COLORS[job.platform]} text-xs`} variant="secondary">
+                      <Badge className={`${PLATFORM_COLORS[job.platform] ?? ""} text-xs`} variant="secondary">
                         {PLATFORM_LABELS[job.platform] ?? job.platform}
                       </Badge>
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1.5">
-                        {(job.status === "running" ||
-                          job.status === "pending") && (
+                        {(job.status === "running" || job.status === "pending") && (
                           <Loader2 className="w-3 h-3 animate-spin text-primary" />
                         )}
-                        <Badge
-                          className={statusColors[job.status] ?? ""}
-                          variant="secondary"
-                        >
+                        <Badge className={statusColors[job.status] ?? ""} variant="secondary">
                           {statusLabels[job.status] ?? job.status}
                         </Badge>
                       </div>
@@ -807,21 +676,7 @@ export default function ExtractPage() {
                     <TableCell>{job.total_extracted ?? 0}</TableCell>
                     <TableCell>{job.new_extracted ?? 0}</TableCell>
                     <TableCell className="text-sm text-muted-foreground">
-                      {job.started_at
-                        ? new Date(job.started_at).toLocaleString("ko-KR")
-                        : "-"}
-                    </TableCell>
-                    <TableCell>
-                      {(job.status === "running" ||
-                        job.status === "pending") && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => checkStatus(job.id)}
-                        >
-                          <RefreshCw className="w-4 h-4" />
-                        </Button>
-                      )}
+                      {job.started_at ? new Date(job.started_at).toLocaleString("ko-KR") : "-"}
                     </TableCell>
                   </TableRow>
                 ))

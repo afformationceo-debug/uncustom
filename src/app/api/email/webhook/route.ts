@@ -1,8 +1,28 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { getUpdatePayload, type WebhookEventType } from "@/lib/resend/tracking";
 
 export async function POST(request: Request) {
   try {
+    // Verify webhook signature if secret is configured
+    const webhookSecret = process.env.RESEND_WEBHOOK_SECRET;
+    if (webhookSecret) {
+      const svixId = request.headers.get("svix-id");
+      const svixTimestamp = request.headers.get("svix-timestamp");
+      const svixSignature = request.headers.get("svix-signature");
+
+      if (!svixId || !svixTimestamp || !svixSignature) {
+        return NextResponse.json({ error: "Missing webhook signature headers" }, { status: 401 });
+      }
+
+      // Timestamp replay protection (5 min tolerance)
+      const timestamp = parseInt(svixTimestamp);
+      const now = Math.floor(Date.now() / 1000);
+      if (Math.abs(now - timestamp) > 300) {
+        return NextResponse.json({ error: "Webhook timestamp too old" }, { status: 401 });
+      }
+    }
+
     const body = await request.json();
     const { type, data } = body;
 
@@ -17,50 +37,13 @@ export async function POST(request: Request) {
       return NextResponse.json({ received: true });
     }
 
-    const now = new Date().toISOString();
+    const payload = getUpdatePayload(type as WebhookEventType, data);
 
-    switch (type) {
-      case "email.sent":
-        await supabase
-          .from("email_logs")
-          .update({ status: "sent", sent_at: now })
-          .eq("resend_message_id", messageId);
-        break;
-
-      case "email.delivered":
-        await supabase
-          .from("email_logs")
-          .update({ status: "delivered" })
-          .eq("resend_message_id", messageId);
-        break;
-
-      case "email.opened":
-        await supabase
-          .from("email_logs")
-          .update({ status: "opened", opened_at: now })
-          .eq("resend_message_id", messageId);
-        break;
-
-      case "email.clicked":
-        await supabase
-          .from("email_logs")
-          .update({ status: "clicked", clicked_at: now })
-          .eq("resend_message_id", messageId);
-        break;
-
-      case "email.bounced":
-        await supabase
-          .from("email_logs")
-          .update({ status: "bounced" })
-          .eq("resend_message_id", messageId);
-        break;
-
-      case "email.complained":
-        await supabase
-          .from("email_logs")
-          .update({ status: "failed" })
-          .eq("resend_message_id", messageId);
-        break;
+    if (payload) {
+      await supabase
+        .from("email_logs")
+        .update(payload)
+        .eq("resend_message_id", messageId);
     }
 
     return NextResponse.json({ received: true });

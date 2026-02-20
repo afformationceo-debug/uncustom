@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { createClient } from "@/lib/supabase/client";
+import { toast } from "sonner";
 
 interface CampaignFormProps {
   teamId: string;
@@ -66,7 +67,8 @@ export function CampaignForm({ teamId, trigger, campaign }: CampaignFormProps) {
       setDescription("");
       router.refresh();
     } catch (error) {
-      console.error("Campaign save failed:", error);
+      const msg = error instanceof Error ? error.message : "알 수 없는 오류";
+      toast.error(`캠페인 저장 실패: ${msg}`);
     } finally {
       setLoading(false);
     }

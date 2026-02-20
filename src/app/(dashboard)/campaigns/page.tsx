@@ -44,7 +44,7 @@ export default async function CampaignsPage() {
       </div>
 
       {!campaigns || campaigns.length === 0 ? (
-        <div className="text-center py-20 text-gray-500">
+        <div className="text-center py-20 text-muted-foreground">
           <p className="text-lg mb-2">캠페인이 없습니다.</p>
           <p className="text-sm">새 캠페인을 만들어 인플루언서 마케팅을 시작하세요.</p>
         </div>

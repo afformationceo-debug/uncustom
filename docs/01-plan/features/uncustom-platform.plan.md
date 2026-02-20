@@ -338,6 +338,10 @@ uncustom/
 │   │   │       ├── contents/page.tsx
 │   │   │       ├── sns-accounts/page.tsx
 │   │   │       └── metrics/page.tsx
+│   │   ├── extract/                  # 마스터 레벨 추출 (B안)
+│   │   │   ├── keywords/page.tsx     # 글로벌 키워드 관리
+│   │   │   ├── tagged/page.tsx       # 글로벌 태그됨 관리
+│   │   │   └── run/page.tsx          # 마스터 추출 실행
 │   │   ├── master/
 │   │   │   └── page.tsx
 │   │   └── api/
@@ -377,26 +381,27 @@ uncustom/
 │   │
 │   ├── lib/
 │   │   ├── supabase/
-│   │   │   ├── client.ts
-│   │   │   ├── server.ts
-│   │   │   ├── admin.ts
-│   │   │   └── middleware.ts
+│   │   │   ├── client.ts         # 브라우저 클라이언트
+│   │   │   ├── server.ts         # 서버 클라이언트 (cookie)
+│   │   │   ├── admin.ts          # service_role 클라이언트
+│   │   │   └── middleware.ts     # Auth 미들웨어
 │   │   ├── apify/
-│   │   │   ├── client.ts
-│   │   │   ├── actors.ts
-│   │   │   └── transform.ts
+│   │   │   ├── client.ts         # Apify SDK 클라이언트
+│   │   │   ├── actors.ts         # Actor ID 상수 & 입력 스키마
+│   │   │   └── transform.ts     # Apify output → 인플루언서 변환 ✅
 │   │   ├── resend/
-│   │   │   ├── client.ts
-│   │   │   └── tracking.ts
-│   │   ├── sns-api/
-│   │   │   ├── instagram.ts
-│   │   │   ├── youtube.ts
-│   │   │   ├── tiktok.ts
-│   │   │   ├── twitter.ts
-│   │   │   └── threads.ts
-│   │   └── utils/
-│   │       ├── email-extractor.ts
-│   │       └── dedup.ts
+│   │   │   ├── client.ts         # Resend SDK 클라이언트
+│   │   │   └── tracking.ts      # 웹훅 이벤트 처리 & CTA 감지 ✅
+│   │   ├── sns-api/              # 플랫폼별 콘텐츠 업로드 API ✅
+│   │   │   ├── instagram.ts     # Instagram Graph API (Reels)
+│   │   │   ├── youtube.ts       # YouTube Data API v3
+│   │   │   ├── tiktok.ts        # TikTok Content Posting API
+│   │   │   ├── twitter.ts       # X API v2 (chunked upload)
+│   │   │   └── threads.ts       # Threads API (Meta Graph)
+│   │   ├── utils/                # 공통 유틸리티 ✅
+│   │   │   ├── email-extractor.ts # 이메일/링크 추출 정규식
+│   │   │   └── dedup.ts          # N회차 중복 발송 필터링
+│   │   └── utils.ts              # cn() 유틸리티
 │   │
 │   ├── hooks/
 │   │   ├── use-realtime.ts
@@ -439,65 +444,121 @@ uncustom/
 - [x] Resend 클라이언트 설정
 - [x] Git 초기화 및 첫 커밋
 
-### Phase 2: DB 스키마 & 기본 레이아웃 (2단계)
-- [ ] Supabase에 전체 테이블 생성
-- [ ] RLS 정책 설정 (팀 기반 접근 제어)
-- [ ] 팀 관리 기능
-- [ ] 사이드바 레이아웃 구현
-- [ ] 캠페인 CRUD 페이지
-- [ ] 대시보드 기본 UI
+### Phase 2: DB 스키마 & 기본 레이아웃 (2단계) ✅
+- [x] Supabase에 전체 테이블 생성 (17 tables)
+- [x] RLS 정책 설정 (22 RLS policies, 팀 기반 접근 제어)
+- [x] 팀 관리 기능 (팀 생성, 멤버 관리)
+- [x] 사이드바 레이아웃 구현 (동적 캠페인 목록)
+- [x] 캠페인 CRUD 페이지
+- [x] 대시보드 기본 UI (실시간 통계)
 
-### Phase 3: 키워드/태그 관리 & 인플루언서 추출 (3단계)
-- [ ] 키워드 등록/관리 UI + API
-- [ ] 태그됨 계정 등록/관리 UI + API
-- [ ] 예상 인플루언서 수 표시
-- [ ] 인플루언서 추출 실행 (Apify Actor 호출)
-- [ ] Apify input 파라미터 설정 UI
-- [ ] 추출 진행 상태 실시간 표시
-- [ ] 중복 감지 및 처리 로직
-- [ ] Linktree/bio 링크 이메일 추출
+### Phase 3: 키워드/태그 관리 & 인플루언서 추출 (3단계) ✅
+- [x] 키워드 등록/관리 UI + API
+- [x] 태그됨 계정 등록/관리 UI + API
+- [x] 예상 인플루언서 수 표시 (Apify estimation)
+- [x] 인플루언서 추출 실행 (Apify Actor 호출)
+- [x] Apify input 파라미터 설정 UI (limit, actor override)
+- [x] 추출 진행 상태 실시간 표시 (5초 auto-polling)
+- [x] 중복 감지 및 처리 로직
+- [x] Linktree/bio 링크 이메일 추출
 
-### Phase 4: 인플루언서 데이터 관리 (4단계)
-- [ ] 플랫폼별 상세 뷰
-- [ ] 마스터 통합 테이블 뷰
-- [ ] 프로필 사진, 주요 메트릭 표시
-- [ ] 정밀 필터링 패널
-- [ ] 인플루언서 데이터 최신화 기능
-- [ ] 이메일 소스 표시
+### Phase 4: 인플루언서 데이터 관리 (4단계) ✅
+- [x] 플랫폼별 상세 뷰 (Instagram, TikTok, YouTube, Twitter 필드)
+- [x] 마스터 통합 테이블 뷰 (범용 필드 통합)
+- [x] 프로필 사진, 주요 메트릭 표시
+- [x] 정밀 필터링 패널 (팔로워, 플랫폼, 국가, 키워드 등)
+- [x] 인플루언서 데이터 최신화 기능
+- [x] 이메일 소스 표시 (bio, linktree, manual 뱃지)
+- [x] 테이블/카드 뷰 토글
 
-### Phase 5: 이메일 캠페인 시스템 (5단계)
-- [ ] Resend API 연동
-- [ ] react-email 이메일 템플릿
-- [ ] Tiptap 에디터 이메일 작성
-- [ ] N회차 템플릿 관리
-- [ ] 필터링된 인플루언서 선택 → 발송
-- [ ] 발송 로그 추적
-- [ ] Resend Webhook 수신
-- [ ] CTA 클릭 추적
-- [ ] N회차 자동 발송 관리
+### Phase 5: 이메일 캠페인 시스템 (5단계) ✅
+- [x] Resend API 연동
+- [x] react-email 이메일 템플릿
+- [x] Tiptap 에디터 이메일 작성 (Gmail 호환 HTML 서식)
+- [x] N회차 템플릿 관리
+- [x] 필터링된 인플루언서 선택 → 발송
+- [x] 발송 로그 추적 (sent/delivered/opened/clicked/bounced)
+- [x] Resend Webhook 수신
+- [x] CTA 클릭 추적 (LINE, WhatsApp 링크)
+- [x] N회차 자동 발송 관리 (미읽음/미회신 필터)
 
-### Phase 6: 인박스 & 회신 관리 (6단계)
-- [ ] Resend Inbound Email 설정
-- [ ] 수신 이메일 본문 조회
-- [ ] 스레드 기반 인박스 UI
-- [ ] 캠페인별 필터링 + 태그
-- [ ] 답장 작성 (HTML 서식)
-- [ ] 실시간 새 메시지 알림
+### Phase 6: 인박스 & 회신 관리 (6단계) ✅
+- [x] Resend Inbound Email 설정
+- [x] 수신 이메일 본문 조회
+- [x] 스레드 기반 인박스 UI (채팅방 스타일)
+- [x] 캠페인별 필터링 + 태그
+- [x] 답장 작성 (Tiptap HTML 서식, 제목 + 본문)
+- [x] 실시간 새 메시지 알림 (Supabase Realtime, dual subscription)
 
-### Phase 7: 최종 인플루언서 관리 & 콘텐츠 (7단계)
-- [ ] 캠페인별 협업 인플루언서 관리
-- [ ] 일정 관리
-- [ ] 비디오 다운로드 (Apify Actor)
-- [ ] Supabase Storage 비디오 저장
-- [ ] 멀티채널 업로드
-- [ ] 플랫폼별 캡션/제목 수정
-- [ ] SNS 계정 관리 (OAuth/API 키)
+### Phase 7: 최종 인플루언서 관리 & 콘텐츠 (7단계) ✅
+- [x] 캠페인별 협업 인플루언서 관리 (상태 파이프라인)
+- [x] 일정 관리 (협업일, 방문일, 업로드일)
+- [x] 비디오 다운로드 (Apify Actor)
+- [x] Supabase Storage 비디오 저장
+- [x] 멀티채널 업로드 (YouTube, Instagram, TikTok, Threads, Twitter)
+- [x] 플랫폼별 캡션/제목 자동 생성
+- [x] SNS 계정 관리 (CRUD, 편집/삭제)
 
-### Phase 8: 성과 추적 & 최적화 (8단계)
-- [ ] 콘텐츠 메트릭 추적
-- [ ] 대시보드 (뷰, 좋아요, 댓글, 공유)
-- [ ] 성과 기반 알림
-- [ ] 전체 대시보드 통계
+### Phase 8: 성과 추적 & 최적화 (8단계) ✅
+- [x] 콘텐츠 메트릭 추적 (Apify social insight)
+- [x] 대시보드 (뷰, 좋아요, 댓글, 공유 통계)
+- [x] 플랫폼별 성과 분석 카드
+- [x] 콘텐츠별 비교 차트 (CSS 바 차트)
+- [x] 플랫폼 필터링
+
+### Phase 9: UI/UX 오버홀 & 테마 시스템 ✅
+- [x] Dark/Light 테마 시스템 구축 (next-themes)
+- [x] Purple accent OKLCH 색상 체계 (light + dark)
+- [x] ThemeToggle 컴포넌트 (Sun/Moon/Monitor 3-way)
+- [x] 사이드바 리디자인 (브랜딩 로고, 활성 상태 표시)
+- [x] 헤더 강화 (테마 토글, 알림, 사용자 아바타)
+- [x] Auth 페이지 오버홀 (로그인/회원가입 테마 지원)
+- [x] 전체 20+ 페이지 테마 호환 클래스 적용
+- [x] CSS 변수 기반 시멘틱 컬러 (bg-card, text-foreground 등)
+- [x] 인플루언서 테이블/카드 뷰 토글
+
+### Phase 10: 코드 아키텍처 정리 & SNS API 통합 ✅
+- [x] SNS 플랫폼별 업로드 API 클라이언트 구현 (5개 파일)
+  - Instagram Graph API (Reels, container-based publish)
+  - YouTube Data API v3 (resumable upload)
+  - TikTok Content Posting API v2 (direct post)
+  - X/Twitter API v2 (chunked media upload + tweet)
+  - Threads API (Meta Graph, container-based publish)
+- [x] contents/upload 라우트 실제 플랫폼 업로드 연동
+- [x] contents/download 라우트 비동기 완전 처리
+  - Apify 실행 → 폴링 대기 → 파일 회수 → Supabase Storage 저장
+- [x] 유틸리티 모듈 분리 (인라인 → 재사용 모듈)
+  - `lib/apify/transform.ts` - Apify output 변환
+  - `lib/resend/tracking.ts` - 웹훅 이벤트 처리
+  - `lib/utils/email-extractor.ts` - 이메일/링크 추출
+  - `lib/utils/dedup.ts` - 중복 발송 필터링
+- [x] 기존 라우트 핸들러에서 유틸 모듈 import 적용
+
+### Phase 11: B안 마스터 추출 & Apify 스키마 검증 ✅
+- [x] 마스터 레벨 추출 (캠페인 독립) 구현
+  - `/extract/keywords` - 글로벌 키워드 관리 (campaign_id null)
+  - `/extract/tagged` - 글로벌 태그됨 계정 관리
+  - `/extract/run` - 마스터 레벨 추출 실행 (모든 키워드/태그 통합)
+- [x] 사이드바에 "인플루언서 추출" 섹션 추가
+- [x] campaign_id nullable 처리 (keywords, tagged_accounts, extraction_jobs)
+- [x] Apify output 스키마 실제 검증 (5개 Actor 문서 확인)
+  - Instagram reel scraper: `ownerProfilePicUrl`, `ownerUsername`, `likesCount`
+  - TikTok scraper: nested `authorMeta.*` (name, fans, avatar)
+  - YouTube scraper: `numberOfSubscribers`, `channelName`, `details`
+  - Twitter scraper: nested `author.*` (userName, name, profilePicture)
+- [x] transform.ts 플랫폼별 변환 함수 분리 및 수정
+- [x] 플랫폼별 인플루언서 뷰 필드 매핑 수정
+- [x] Tagged 추출 비Instagram 경고 UI 추가
+
+### Phase 12: 프로덕션 안정화 & 갭 수정 ✅
+- [x] Apify `actor.call()` → `actor.start()` 전환 (서버리스 타임아웃 방지)
+- [x] contents/download 라우트 비동기 시작 + 프론트엔드 폴링 패턴
+- [x] metrics 라우트 비동기 시작 + PUT 상태 확인 엔드포인트
+- [x] 답장 모드 발신자 정보 캠페인 템플릿 기반 동적 설정
+- [x] Resend webhook 서명 검증 (svix 헤더, 타임스탬프 replay 방지)
+- [x] CampaignForm 에러 토스트 표시 (console.error → toast.error)
+- [x] influencers/refresh 비동기 시작 + 비Instagram 경고 메시지 반환
+- [x] 프론트엔드 다운로드/메트릭 폴링 핸들러 구현
 
 ---
 

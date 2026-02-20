@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,7 @@ import { Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import type { Tables } from "@/types/database";
 import { PLATFORMS } from "@/types/platform";
+import { useRealtime } from "@/hooks/use-realtime";
 
 type Keyword = Tables<"keywords">;
 
@@ -31,6 +32,11 @@ export default function KeywordsPage() {
   useEffect(() => {
     fetchKeywords();
   }, [campaignId]);
+
+  const realtimeCallback = useCallback(() => {
+    fetchKeywords();
+  }, [campaignId]);
+  useRealtime("keywords", `campaign_id=eq.${campaignId}`, realtimeCallback);
 
   async function fetchKeywords() {
     setLoading(true);
@@ -89,9 +95,9 @@ export default function KeywordsPage() {
 
   const platformColor: Record<string, string> = {
     instagram: "bg-pink-100 text-pink-800",
-    tiktok: "bg-gray-100 text-gray-800",
+    tiktok: "bg-muted text-foreground",
     youtube: "bg-red-100 text-red-800",
-    twitter: "bg-blue-100 text-blue-800",
+    twitter: "bg-primary/10 text-primary",
   };
 
   return (
@@ -156,13 +162,13 @@ export default function KeywordsPage() {
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center py-8 text-gray-500">
+                  <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
                     로딩 중...
                   </TableCell>
                 </TableRow>
               ) : keywords.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center py-8 text-gray-500">
+                  <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
                     등록된 키워드가 없습니다.
                   </TableCell>
                 </TableRow>
@@ -177,7 +183,7 @@ export default function KeywordsPage() {
                     </TableCell>
                     <TableCell>{kw.country ?? "-"}</TableCell>
                     <TableCell>{kw.estimated_count?.toLocaleString() ?? "-"}</TableCell>
-                    <TableCell className="text-gray-500 text-sm">
+                    <TableCell className="text-muted-foreground text-sm">
                       {new Date(kw.created_at).toLocaleDateString("ko-KR")}
                     </TableCell>
                     <TableCell>

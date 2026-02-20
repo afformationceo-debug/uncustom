@@ -32,7 +32,7 @@ export default async function CampaignLayout({
       <div>
         <h1 className="text-2xl font-bold">{campaign.name}</h1>
         {campaign.description && (
-          <p className="text-gray-500 mt-1">{campaign.description}</p>
+          <p className="text-muted-foreground mt-1">{campaign.description}</p>
         )}
       </div>
       <CampaignNav campaignId={id} />

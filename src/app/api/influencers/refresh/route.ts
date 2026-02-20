@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { runActor, getDatasetItems } from "@/lib/apify/client";
+import { startActor, getRunStatus, getDatasetItems } from "@/lib/apify/client";
 import { APIFY_ACTORS } from "@/lib/apify/actors";
+import { transformApifyItem } from "@/lib/apify/transform";
 import type { Tables } from "@/types/database";
 
 type Influencer = Tables<"influencers">;
@@ -27,45 +28,82 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "No influencers found" }, { status: 404 });
     }
 
-    // Group by platform for batch refresh
+    // Group by platform
     const igUsers = influencers
       .filter((i) => i.platform === "instagram" && i.username)
       .map((i) => i.username!);
 
+    const unsupportedPlatforms = new Set(
+      influencers
+        .filter((i) => i.platform !== "instagram")
+        .map((i) => i.platform)
+    );
+
     let updated = 0;
 
+    // Instagram profile refresh
     if (igUsers.length > 0) {
-      const run = await runActor(APIFY_ACTORS.INSTAGRAM_PROFILE, {
+      const run = await startActor(APIFY_ACTORS.INSTAGRAM_PROFILE, {
         usernames: igUsers,
       });
 
-      const items = await getDatasetItems(run.defaultDatasetId);
+      // Wait briefly for the profile scraper (usually fast)
+      let runStatus = run.status;
+      for (let i = 0; i < 12; i++) {
+        if (runStatus === "SUCCEEDED" || runStatus === "FAILED" || runStatus === "ABORTED") break;
+        await new Promise((r) => setTimeout(r, 5000));
+        const status = await getRunStatus(run.id);
+        if (status) runStatus = status.status;
+      }
 
-      for (const item of items) {
-        const record = item as Record<string, unknown>;
-        const username = record.username as string;
-        if (!username) continue;
+      if (runStatus === "SUCCEEDED") {
+        const items = await getDatasetItems(run.defaultDatasetId);
 
-        await supabase
-          .from("influencers")
-          .update({
-            display_name: (record.fullName ?? "") as string,
-            bio: (record.biography ?? "") as string,
-            follower_count: (record.followersCount ?? null) as number | null,
-            following_count: (record.followsCount ?? null) as number | null,
-            post_count: (record.postsCount ?? null) as number | null,
-            profile_image_url: (record.profilePicUrlHD ?? record.profilePicUrl ?? "") as string,
-            email: (record.businessEmail ?? null) as string | null,
+        for (const item of items) {
+          const record = item as Record<string, unknown>;
+          const transformed = transformApifyItem(record, "instagram");
+          if (!transformed || !transformed.username) continue;
+
+          const updateData: Record<string, unknown> = {
+            display_name: transformed.display_name || undefined,
+            bio: transformed.bio || undefined,
+            follower_count: transformed.follower_count,
+            following_count: transformed.following_count,
+            post_count: transformed.post_count,
+            profile_image_url: transformed.profile_image_url || undefined,
             last_updated_at: new Date().toISOString(),
-          })
-          .eq("platform", "instagram")
-          .eq("username", username);
+          };
+          if (transformed.email) {
+            updateData.email = transformed.email;
+            updateData.email_source = transformed.email_source;
+          }
+          Object.keys(updateData).forEach((k) => {
+            if (updateData[k] === undefined) delete updateData[k];
+          });
 
-        updated++;
+          await supabase
+            .from("influencers")
+            .update(updateData)
+            .eq("platform", "instagram")
+            .eq("username", transformed.username);
+
+          updated++;
+        }
       }
     }
 
-    return NextResponse.json({ updated });
+    const warnings: string[] = [];
+    if (unsupportedPlatforms.size > 0) {
+      warnings.push(
+        `현재 프로필 새로고침은 Instagram만 지원합니다. 건너뛴 플랫폼: ${Array.from(unsupportedPlatforms).join(", ")}`
+      );
+    }
+
+    return NextResponse.json({
+      updated,
+      total: influencers.length,
+      warnings: warnings.length > 0 ? warnings : undefined,
+    });
   } catch (err) {
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }

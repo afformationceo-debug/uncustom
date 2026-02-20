@@ -1,19 +1,27 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Edit2, Trash2, Save } from "lucide-react";
+import { Plus, Edit2, Trash2, Save, Copy } from "lucide-react";
 import { toast } from "sonner";
+import TiptapEditor from "@/components/email/template-editor";
 import type { Tables } from "@/types/database";
+import { useRealtime } from "@/hooks/use-realtime";
 
 type EmailTemplate = Tables<"email_templates">;
+
+const TEMPLATE_VARIABLES = [
+  { key: "{{name}}", label: "인플루언서 이름" },
+  { key: "{{username}}", label: "인플루언서 유저네임" },
+  { key: "{{email}}", label: "인플루언서 이메일" },
+  { key: "{{sender_name}}", label: "보내는 사람 이름" },
+];
 
 export default function EmailTemplatesPage() {
   const params = useParams();
@@ -35,6 +43,11 @@ export default function EmailTemplatesPage() {
   useEffect(() => {
     fetchTemplates();
   }, [campaignId]);
+
+  const realtimeCallback = useCallback(() => {
+    fetchTemplates();
+  }, [campaignId]);
+  useRealtime("email_templates", `campaign_id=eq.${campaignId}`, realtimeCallback);
 
   async function fetchTemplates() {
     setLoading(true);
@@ -135,6 +148,11 @@ export default function EmailTemplatesPage() {
     setRoundNumber(templates.length + 1);
   }
 
+  function copyVariable(variable: string) {
+    navigator.clipboard.writeText(variable);
+    toast.success(`${variable} 복사됨`);
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -196,16 +214,33 @@ export default function EmailTemplatesPage() {
             </div>
             <div>
               <Label>본문 (HTML)</Label>
-              <Textarea
-                value={bodyHtml}
-                onChange={(e) => setBodyHtml(e.target.value)}
-                placeholder="<p>안녕하세요, {{name}}님!</p>"
-                rows={10}
-                className="font-mono text-sm"
+              <TiptapEditor
+                content={bodyHtml}
+                onChange={setBodyHtml}
+                placeholder="이메일 본문을 작성하세요..."
               />
-              <p className="text-xs text-gray-500 mt-1">
-                변수: {"{{name}}"}, {"{{username}}"}, {"{{email}}"} 사용 가능
-              </p>
+              <div className="mt-2 p-3 bg-muted/50 rounded-md">
+                <p className="text-xs text-muted-foreground mb-2 font-medium">
+                  사용 가능한 변수 (클릭하여 복사):
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {TEMPLATE_VARIABLES.map((v) => (
+                    <button
+                      key={v.key}
+                      type="button"
+                      onClick={() => copyVariable(v.key)}
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-background border text-xs font-mono hover:bg-accent transition-colors cursor-pointer"
+                      title={v.label}
+                    >
+                      <Copy className="w-3 h-3 text-muted-foreground" />
+                      {v.key}
+                      <span className="text-muted-foreground font-sans ml-1">
+                        {v.label}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
             <div className="flex gap-2">
               <Button onClick={editing ? () => handleUpdate(editing) : handleCreate}>
@@ -229,9 +264,9 @@ export default function EmailTemplatesPage() {
 
       <div className="space-y-3">
         {loading ? (
-          <p className="text-gray-500 text-center py-8">로딩 중...</p>
+          <p className="text-muted-foreground text-center py-8">로딩 중...</p>
         ) : templates.length === 0 ? (
-          <p className="text-gray-500 text-center py-8">등록된 템플릿이 없습니다.</p>
+          <p className="text-muted-foreground text-center py-8">등록된 템플릿이 없습니다.</p>
         ) : (
           templates.map((tmpl) => (
             <Card key={tmpl.id}>
@@ -242,11 +277,11 @@ export default function EmailTemplatesPage() {
                       <Badge variant="secondary">{tmpl.round_number}회차</Badge>
                       <span className="font-medium">{tmpl.subject}</span>
                     </div>
-                    <p className="text-sm text-gray-500">
+                    <p className="text-sm text-muted-foreground">
                       {tmpl.sender_name && `${tmpl.sender_name} `}
                       {tmpl.sender_email && `<${tmpl.sender_email}>`}
                     </p>
-                    <div className="mt-2 text-sm text-gray-600 line-clamp-2">
+                    <div className="mt-2 text-sm text-muted-foreground line-clamp-2">
                       {tmpl.body_html.replace(/<[^>]*>/g, "").slice(0, 200)}
                     </div>
                   </div>

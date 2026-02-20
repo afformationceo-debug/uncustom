@@ -11,10 +11,15 @@ export function getApifyClient(): ApifyClient {
   return client;
 }
 
-export async function runActor(actorId: string, input: Record<string, unknown>) {
+export async function startActor(actorId: string, input: Record<string, unknown>) {
   const client = getApifyClient();
-  const run = await client.actor(actorId).call(input);
+  const run = await client.actor(actorId).start(input);
   return run;
+}
+
+/** @deprecated Use startActor() instead - call() blocks until completion and will timeout in serverless */
+export async function runActor(actorId: string, input: Record<string, unknown>) {
+  return startActor(actorId, input);
 }
 
 export async function getDatasetItems(datasetId: string) {

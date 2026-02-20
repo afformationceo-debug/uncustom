@@ -10,7 +10,7 @@
 | 레이어 | 기술 | 이유 |
 |--------|------|------|
 | Frontend | **Next.js 15 App Router** + TypeScript | SSR/RSC, NEXT_PUBLIC 환경변수 |
-| UI | **Tailwind CSS** + **shadcn/ui** | 빠른 UI 개발, 일관된 디자인 시스템 |
+| UI | **Tailwind CSS v4** + **shadcn/ui** + **next-themes** | Dark/Light 테마, 일관된 디자인 시스템 |
 | Backend/DB | **Supabase** (PostgreSQL + Auth + Realtime + Storage) | 실시간 WebSocket, RLS, Edge Functions |
 | Scraping | **Apify** REST API | 플랫폼별 최적 Actor 활용 |
 | Auth | **Supabase Auth** | 팀 사용, 이메일/비밀번호 로그인, RLS 연동 |
@@ -58,6 +58,10 @@ uncustom/
 │   │   │       ├── contents/         # 콘텐츠 관리/업로드
 │   │   │       ├── sns-accounts/     # SNS 계정 관리
 │   │   │       └── metrics/          # 성과 추적
+│   │   ├── extract/              # 마스터 레벨 추출 (B안)
+│   │   │   ├── keywords/         # 글로벌 키워드 관리
+│   │   │   ├── tagged/           # 글로벌 태그됨 관리
+│   │   │   └── run/              # 마스터 추출 실행
 │   │   ├── master/               # 전체 마스터데이터 (캠페인 통합)
 │   │   └── api/                  # API Route Handlers
 │   │       ├── campaigns/
@@ -84,9 +88,14 @@ uncustom/
 │   │
 │   ├── lib/
 │   │   ├── supabase/             # client.ts, server.ts, admin.ts, middleware.ts
-│   │   ├── apify/                # client.ts, actors.ts, transform.ts
-│   │   ├── resend/               # client.ts, tracking.ts
-│   │   ├── sns-api/              # instagram.ts, youtube.ts, tiktok.ts, twitter.ts, threads.ts
+│   │   ├── apify/                # client.ts, actors.ts, transform.ts (output→DB 변환)
+│   │   ├── resend/               # client.ts, tracking.ts (웹훅 이벤트 처리)
+│   │   ├── sns-api/              # 플랫폼별 업로드 API 클라이언트 (5개)
+│   │   │   ├── instagram.ts      # Graph API container-based Reels upload
+│   │   │   ├── youtube.ts        # Data API v3 resumable upload
+│   │   │   ├── tiktok.ts         # Content Posting API v2
+│   │   │   ├── twitter.ts        # X API v2 chunked media + tweet
+│   │   │   └── threads.ts        # Meta Graph API container-based
 │   │   └── utils/                # email-extractor.ts, dedup.ts
 │   │
 │   ├── hooks/                    # use-realtime.ts, use-campaign.ts, use-influencers.ts
@@ -143,10 +152,16 @@ uncustom/
 - 서버 전용 (admin 작업): `lib/supabase/admin.ts` → `createAdminClient()`
 - RLS 정책은 team_id 기반으로 접근 제어
 
-### UI
+### UI & 테마 시스템
 - shadcn/ui 컴포넌트를 기본으로 사용
-- Tailwind CSS 유틸리티 클래스 사용
+- Tailwind CSS v4 유틸리티 클래스 사용
 - `cn()` 유틸리티 함수로 클래스 결합
+- **next-themes** 기반 Dark/Light/System 3-way 테마 토글
+- Purple accent OKLCH 색상 체계 (`globals.css`에 정의)
+- 시멘틱 CSS 변수 사용: `bg-card`, `text-foreground`, `bg-muted`, `text-muted-foreground`, `bg-primary`
+- 하드코딩된 컬러 클래스 사용 금지 (`bg-gray-50` → `bg-muted/50`, `bg-white` → `bg-card`)
+- 상태 색상은 opacity 패턴: `bg-green-500/10 text-green-500`
+- `ThemeToggle` 컴포넌트: `src/components/layout/theme-toggle.tsx`
 
 ### 상태 관리
 - 글로벌 상태: Zustand store (src/stores/)
@@ -189,16 +204,59 @@ uncustom/
 - X API v2: 트윗/미디어 업로드
 - Threads API: 텍스트/미디어 게시
 
-## 구현 단계 (총 8단계)
+## 구현 단계 (총 12단계) - 전체 완료
 
 ### Phase 1: 프로젝트 초기화 & 인프라 ✅
-### Phase 2: DB 스키마 & 기본 레이아웃
-### Phase 3: 키워드/태그 관리 & 인플루언서 추출
-### Phase 4: 인플루언서 데이터 관리
-### Phase 5: 이메일 캠페인 시스템
-### Phase 6: 인박스 & 회신 관리
-### Phase 7: 최종 인플루언서 관리 & 콘텐츠
-### Phase 8: 성과 추적 & 최적화
+### Phase 2: DB 스키마 & 기본 레이아웃 ✅
+- 17 tables, 22 RLS policies, 9 indexes, 7 Realtime tables on Supabase
+- Dashboard with real data, sidebar with dynamic campaigns
+### Phase 3: 키워드/태그 관리 & 인플루언서 추출 ✅
+- Keywords & tagged accounts CRUD with estimation
+- Apify extraction with auto-polling, advanced settings (limit, actor override)
+- Instagram reel scraper as default, email extraction from bio/linktree
+### Phase 4: 인플루언서 데이터 관리 ✅
+- Platform-specific detail views (Instagram, TikTok, YouTube, Twitter fields)
+- Master data table with advanced filtering, pagination, email source badges
+- Duplicate detection, profile image display, raw data viewer, table/card view toggle
+### Phase 5: 이메일 캠페인 시스템 ✅
+- N-round email campaign management with Tiptap HTML editor
+- Template variables (influencer_name, campaign_name, etc.)
+- Resend webhook tracking (sent/delivered/opened/clicked/bounced/CTA)
+- Batch send with duplicate prevention, round-based filtering
+### Phase 6: 인박스 & 회신 관리 ✅
+- Thread-based inbox with chat UI, rich text Tiptap reply
+- Search, profile images, unread indicators, dual realtime subscriptions
+- Reply subject field, auto-scroll, platform badges
+### Phase 7: 최종 인플루언서 관리 & 콘텐츠 ✅
+- Status pipeline filters with colored dots and counts
+- Multi-channel upload dialog (YouTube, Instagram, TikTok, Threads, Twitter)
+- Platform-specific caption generation, SNS account CRUD management
+### Phase 8: 성과 추적 & 최적화 ✅
+- Metrics dashboard (views, likes, comments, shares, engagement rate)
+- Apify social insight integration for metric refresh
+- Per-upload performance tracking, platform breakdown cards, bar chart comparison
+### Phase 9: UI/UX 오버홀 & 테마 시스템 ✅
+- Dark/Light/System 테마 토글 (next-themes, purple OKLCH accent)
+- 전체 20+ 페이지 테마 호환 CSS 변수 적용
+- 사이드바/헤더 리디자인, Auth 페이지 오버홀
+- 인플루언서 테이블/카드 뷰 토글
+### Phase 10: 코드 아키텍처 정리 & SNS API 통합 ✅
+- SNS 5개 플랫폼 업로드 API 클라이언트 (instagram, youtube, tiktok, twitter, threads)
+- contents/upload 실제 플랫폼 업로드 연동, contents/download 비동기 완전 처리
+- 유틸리티 모듈 분리 (transform.ts, tracking.ts, email-extractor.ts, dedup.ts)
+### Phase 11: B안 마스터 추출 & Apify 스키마 검증 ✅
+- 마스터 레벨 추출 페이지 3개 (extract/keywords, tagged, run)
+- Apify 5개 Actor output 스키마 실제 검증 및 transform.ts 수정
+- campaign_id nullable 처리, 사이드바 추출 섹션 추가
+### Phase 12: 프로덕션 안정화 & 갭 수정 ✅
+- Apify actor.call() → actor.start() (서버리스 타임아웃 방지)
+- download/metrics 비동기 시작 + 프론트엔드 폴링 패턴
+- 답장 발신자 동적 설정, webhook 서명 검증, 에러 토스트 추가
+
+## Supabase Type Pattern
+- All `.select("*")` results must be cast: `(data as TypeName[]) ?? []`
+- Join queries use `as unknown as TypeName` for nested relation types
+- `types/database.ts` has `Relationships` field for Insert/Update operations
 
 ## 빌드 & 실행
 

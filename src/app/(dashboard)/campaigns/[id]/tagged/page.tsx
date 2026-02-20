@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,7 @@ import { Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import type { Tables } from "@/types/database";
 import { PLATFORMS } from "@/types/platform";
+import { useRealtime } from "@/hooks/use-realtime";
 
 type TaggedAccount = Tables<"tagged_accounts">;
 
@@ -30,6 +31,11 @@ export default function TaggedPage() {
   useEffect(() => {
     fetchAccounts();
   }, [campaignId]);
+
+  const realtimeCallback = useCallback(() => {
+    fetchAccounts();
+  }, [campaignId]);
+  useRealtime("tagged_accounts", `campaign_id=eq.${campaignId}`, realtimeCallback);
 
   async function fetchAccounts() {
     setLoading(true);
@@ -97,7 +103,7 @@ export default function TaggedPage() {
           <CardTitle className="text-base">경쟁사 계정 추가</CardTitle>
         </CardHeader>
         <CardContent>
-          <p className="text-sm text-gray-500 mb-3">
+          <p className="text-sm text-muted-foreground mb-3">
             경쟁사 계정에 태그된 인플루언서를 추출할 수 있습니다.
           </p>
           <div className="flex gap-3">
@@ -143,13 +149,13 @@ export default function TaggedPage() {
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-center py-8 text-gray-500">
+                  <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
                     로딩 중...
                   </TableCell>
                 </TableRow>
               ) : accounts.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-center py-8 text-gray-500">
+                  <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
                     등록된 태그 계정이 없습니다.
                   </TableCell>
                 </TableRow>
@@ -163,7 +169,7 @@ export default function TaggedPage() {
                       </Badge>
                     </TableCell>
                     <TableCell>{acc.estimated_count?.toLocaleString() ?? "-"}</TableCell>
-                    <TableCell className="text-gray-500 text-sm">
+                    <TableCell className="text-muted-foreground text-sm">
                       {new Date(acc.created_at).toLocaleDateString("ko-KR")}
                     </TableCell>
                     <TableCell>

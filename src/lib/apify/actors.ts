@@ -27,6 +27,8 @@ export const APIFY_ACTORS = {
 export type ApifyActorId = (typeof APIFY_ACTORS)[keyof typeof APIFY_ACTORS];
 
 // Platform to Actor mapping for keyword-based extraction
+// NOTE: Instagram keyword extraction uses HASHTAG scraper (not reel scraper)
+// Reel scraper requires a specific username, not a keyword/hashtag
 export const PLATFORM_KEYWORD_ACTORS: Record<string, string> = {
   instagram: APIFY_ACTORS.INSTAGRAM_HASHTAG,
   tiktok: APIFY_ACTORS.TIKTOK,
@@ -44,6 +46,11 @@ export function getDefaultInput(actorId: string, params: { keyword?: string; use
   const { keyword, username, limit = 50 } = params;
 
   switch (actorId) {
+    case APIFY_ACTORS.INSTAGRAM_REEL:
+      return {
+        hashtags: [keyword],
+        resultsLimit: limit,
+      };
     case APIFY_ACTORS.INSTAGRAM_HASHTAG:
       return {
         hashtags: [keyword],
@@ -71,7 +78,7 @@ export function getDefaultInput(actorId: string, params: { keyword?: string; use
     case APIFY_ACTORS.TWITTER:
       return {
         searchTerms: [keyword],
-        maxTweets: limit,
+        maxItems: limit,
       };
     case APIFY_ACTORS.VIDEO_DOWNLOADER:
       return {

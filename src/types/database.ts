@@ -103,7 +103,7 @@ export type Database = {
       keywords: {
         Row: {
           id: string;
-          campaign_id: string;
+          campaign_id: string | null;
           keyword: string;
           platform: string;
           country: string | null;
@@ -112,7 +112,7 @@ export type Database = {
         };
         Insert: {
           id?: string;
-          campaign_id: string;
+          campaign_id?: string | null;
           keyword: string;
           platform: string;
           country?: string | null;
@@ -121,7 +121,7 @@ export type Database = {
         };
         Update: {
           id?: string;
-          campaign_id?: string;
+          campaign_id?: string | null;
           keyword?: string;
           platform?: string;
           country?: string | null;
@@ -141,7 +141,7 @@ export type Database = {
       tagged_accounts: {
         Row: {
           id: string;
-          campaign_id: string;
+          campaign_id: string | null;
           account_username: string;
           platform: string;
           estimated_count: number | null;
@@ -149,7 +149,7 @@ export type Database = {
         };
         Insert: {
           id?: string;
-          campaign_id: string;
+          campaign_id?: string | null;
           account_username: string;
           platform: string;
           estimated_count?: number | null;
@@ -157,7 +157,7 @@ export type Database = {
         };
         Update: {
           id?: string;
-          campaign_id?: string;
+          campaign_id?: string | null;
           account_username?: string;
           platform?: string;
           estimated_count?: number | null;
@@ -176,7 +176,7 @@ export type Database = {
       extraction_jobs: {
         Row: {
           id: string;
-          campaign_id: string;
+          campaign_id: string | null;
           type: string;
           source_id: string | null;
           platform: string;
@@ -191,7 +191,7 @@ export type Database = {
         };
         Insert: {
           id?: string;
-          campaign_id: string;
+          campaign_id?: string | null;
           type: string;
           source_id?: string | null;
           platform: string;
@@ -206,7 +206,7 @@ export type Database = {
         };
         Update: {
           id?: string;
-          campaign_id?: string;
+          campaign_id?: string | null;
           type?: string;
           source_id?: string | null;
           platform?: string;
