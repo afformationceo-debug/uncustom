@@ -40,6 +40,7 @@ type CampaignInfluencer = Tables<"campaign_influencers">;
 type EnrichedInfluencer = Influencer & {
   campaign_status?: string;
   campaign_influencer_id?: string;
+  email_source_url?: string | null;
 };
 
 // Platform-specific important fields for table columns (concise subset)
@@ -235,10 +236,36 @@ export default function InfluencersPage() {
     if (error) {
       toast.error("인플루언서 로드 실패: " + error.message);
     } else {
-      const enriched = ((data as Influencer[]) ?? []).map((inf) => ({
+      const infList = (data as Influencer[]) ?? [];
+      const infIds = infList.map((i) => i.id);
+
+      // Fetch email source links for influencers with linktree-sourced emails
+      const linkInfluencerIds = infList
+        .filter((i) => i.email && (i.email_source === "linktree" || i.email_source === "website"))
+        .map((i) => i.id);
+
+      let linkMap = new Map<string, string>();
+      if (linkInfluencerIds.length > 0) {
+        const { data: linksData } = await supabase
+          .from("influencer_links")
+          .select("influencer_id, url")
+          .in("influencer_id", linkInfluencerIds)
+          .eq("scraped", true)
+          .not("emails_found", "is", null);
+        if (linksData) {
+          for (const link of linksData as { influencer_id: string; url: string }[]) {
+            if (!linkMap.has(link.influencer_id)) {
+              linkMap.set(link.influencer_id, link.url);
+            }
+          }
+        }
+      }
+
+      const enriched = infList.map((inf) => ({
         ...inf,
         campaign_status: ciMap.get(inf.id)?.status,
         campaign_influencer_id: ciMap.get(inf.id)?.id,
+        email_source_url: linkMap.get(inf.id) ?? null,
       }));
       setInfluencers(enriched);
       setTotal(count ?? 0);
@@ -265,6 +292,13 @@ export default function InfluencersPage() {
   useRealtime(
     "campaign_influencers",
     `campaign_id=eq.${campaignId}`,
+    () => fetchInfluencers()
+  );
+
+  // Realtime: refresh when influencer data updates (e.g., email extraction)
+  useRealtime(
+    "influencers",
+    undefined,
     () => fetchInfluencers()
   );
 
@@ -517,6 +551,7 @@ export default function InfluencersPage() {
                   <TableHead>프로필 링크</TableHead>
                   <TableHead>팔로워</TableHead>
                   <TableHead>이메일</TableHead>
+                  <TableHead>이메일 소스</TableHead>
                   {/* Platform-specific columns when filtered */}
                   {isPlatformFiltered && platformCols.map((col) => (
                     <TableHead key={col.key}>{col.label}</TableHead>
@@ -528,13 +563,13 @@ export default function InfluencersPage() {
               <TableBody>
                 {loading ? (
                   <TableRow>
-                    <TableCell colSpan={isPlatformFiltered ? 10 + platformCols.length : 10} className="text-center py-8 text-muted-foreground">
+                    <TableCell colSpan={isPlatformFiltered ? 11 + platformCols.length : 11} className="text-center py-8 text-muted-foreground">
                       로딩 중...
                     </TableCell>
                   </TableRow>
                 ) : influencers.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={isPlatformFiltered ? 10 + platformCols.length : 10} className="text-center py-8 text-muted-foreground">
+                    <TableCell colSpan={isPlatformFiltered ? 11 + platformCols.length : 11} className="text-center py-8 text-muted-foreground">
                       인플루언서가 없습니다.
                     </TableCell>
                   </TableRow>
@@ -617,15 +652,33 @@ export default function InfluencersPage() {
                                 <Mail className="w-3 h-3 text-muted-foreground shrink-0" />
                                 {inf.email}
                               </div>
-                              {inf.email_source && (
-                                <Badge
-                                  className={`text-[10px] mt-0.5 ${emailSourceBadge[inf.email_source]?.color ?? ""}`}
-                                  variant="secondary"
-                                >
-                                  {emailSourceBadge[inf.email_source]?.label ?? inf.email_source}
-                                </Badge>
-                              )}
                             </div>
+                          ) : (
+                            <span className="text-muted-foreground text-xs">-</span>
+                          )}
+                        </TableCell>
+                        {/* Email Source URL */}
+                        <TableCell>
+                          {inf.email ? (
+                            inf.email_source_url ? (
+                              <a
+                                href={inf.email_source_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-primary hover:underline text-xs flex items-center gap-1 max-w-36 truncate"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <LinkIcon className="w-3 h-3 shrink-0" />
+                                <span className="truncate">{inf.email_source_url.replace(/https?:\/\/(www\.)?/, "")}</span>
+                              </a>
+                            ) : (
+                              <Badge
+                                className={`text-[10px] ${emailSourceBadge[inf.email_source ?? ""]?.color ?? ""}`}
+                                variant="secondary"
+                              >
+                                {emailSourceBadge[inf.email_source ?? ""]?.label ?? inf.email_source ?? "-"}
+                              </Badge>
+                            )
                           ) : (
                             <span className="text-muted-foreground text-xs">-</span>
                           )}
