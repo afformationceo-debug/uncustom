@@ -109,7 +109,12 @@ export async function POST(request: Request) {
 
     // Start the Apify EMAIL_EXTRACTOR actor (non-blocking)
     try {
-      const run = await startActor(APIFY_ACTORS.EMAIL_EXTRACTOR, { startUrls: urls.map(url => ({ url })) });
+      const run = await startActor(APIFY_ACTORS.EMAIL_EXTRACTOR, {
+        startUrls: urls.map(url => ({ url })),
+        maxDepth: 1,
+        maxRequestsPerStartUrl: 5,
+        sameDomain: true,
+      });
 
       await supabase
         .from("extraction_jobs")

@@ -20,7 +20,7 @@ Supabase 실시간 동기화로 프론트엔드에 즉시 반영.
 ### 2. Instagram 2단계 자동 파이프라인
 1. **릴스 스크래퍼** (`apify/instagram-reel-scraper`): 키워드(해시태그)로 릴스 검색 → 인플루언서 username/platform_id/프로필사진 추출
 2. **프로필 스크래퍼** (`apify/instagram-profile-scraper`): 자동 트리거되어 팔로워수, 바이오, 이메일, 게시물수, latestPosts 보강
-3. **이메일 추출** (선택): 바이오 링크에서 이메일 수집 (`ahmed_jasarevic/linktree-beacons-bio-email-scraper`)
+3. **이메일 추출** (선택): 바이오 링크/웹사이트에서 이메일 수집 (`vdrmota/contact-info-scraper`)
 
 ### 3. 마스터데이터 → 캠페인 배정
 - `/master` 페이지에서 인플루언서를 **체크박스로 선택**
@@ -60,8 +60,7 @@ Supabase 실시간 동기화로 프론트엔드에 즉시 반영.
 | TikTok | `clockworks/tiktok-scraper` | `{ searchQueries: [keyword], resultsPerPage }` |
 | YouTube | `streamers/youtube-scraper` | `{ searchKeywords: keyword, maxResults }` |
 | Twitter/X | `apidojo/tweet-scraper` | `{ searchTerms: [keyword], maxItems }` |
-| 이메일 추출 (링크) | `ahmed_jasarevic/linktree-beacons-bio-email-scraper-extract-leads` | `{ urls: [...] }` |
-| 이메일 추출 (소셜) | `chitosibug3/social-media-email-scraper-2026` | `{ items: [{platform, user_id}] }` |
+| 이메일 추출 (웹) | `vdrmota/contact-info-scraper` | `{ startUrls: [{url}], maxDepth: 1, sameDomain: true }` |
 | 비디오 다운로드 | `easyapi/all-in-one-media-downloader` | `{ urls: [...] }` |
 | 콘텐츠 메트릭 | `insiteco/social-insight-scraper` | URL 기반 |
 
@@ -81,13 +80,14 @@ Supabase 실시간 동기화로 프론트엔드에 즉시 반영.
     → 팔로워수, 바이오, 이메일, 프로필사진 등 보강
 ```
 
-### 크로스 플랫폼 이메일 추출 플로우
+### 웹 기반 이메일 추출 플로우
 ```
-모든 플랫폼 추출 완료 → autoTriggerSocialEmailExtraction() 자동 트리거
+모든 플랫폼 추출 완료 → autoTriggerWebEmailExtraction() 자동 트리거
   → email이 null인 인플루언서 최대 200명 수집
-  → social-media-email-scraper 실행 (platform + user_id 기반)
-  → 이메일 발견 시 influencers.email 업데이트 (email_source: "social-scraper:{platform}")
-  → Instagram, TikTok, YouTube, Twitter 모두 지원 (웹사이트 스크래핑 불필요)
+  → external_url + profile_url + bio links 수집
+  → vdrmota/contact-info-scraper 실행 (URL 기반, maxDepth: 1)
+  → Linktree, Littly, Beacons, 개인 웹사이트 등 모든 URL 지원
+  → 이메일 발견 시 influencers.email 업데이트 (email_source: "{domain}:{url}")
 ```
 
 ## 프로젝트 구조
@@ -264,7 +264,7 @@ uncustom/
 - `tagged` - 태그 계정 기반 추출
 - `enrich` - 프로필 보강 (Instagram Profile Scraper)
 - `email_scrape` - 배치 이메일 추출 (바이오 링크 스크래핑)
-- `email_social` - 소셜미디어 이메일 추출 (플랫폼+user_id 기반, 모든 플랫폼)
+- `email_scrape` type으로 통합: 웹 기반 이메일 추출 (vdrmota/contact-info-scraper)
 
 ## 사이드바 네비게이션 구조
 

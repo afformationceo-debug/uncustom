@@ -130,9 +130,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Failed to create extraction job" }, { status: 500 });
     }
 
-    // Start the Apify EMAIL_EXTRACTOR actor with all URLs
+    // Start the Apify EMAIL_EXTRACTOR (vdrmota/contact-info-scraper) with all URLs
     try {
-      const run = await startActor(APIFY_ACTORS.EMAIL_EXTRACTOR, { urls });
+      const run = await startActor(APIFY_ACTORS.EMAIL_EXTRACTOR, {
+        startUrls: urls.map(url => ({ url })),
+        maxDepth: 1,
+        maxRequestsPerStartUrl: 5,
+        sameDomain: true,
+      });
 
       // Update job with apify_run_id
       await supabase

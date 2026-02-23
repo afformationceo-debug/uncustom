@@ -1010,9 +1010,12 @@ async function autoTriggerEmailExtraction(
       return null;
     }
 
-    // Start EMAIL_EXTRACTOR with startUrls format
+    // Start EMAIL_EXTRACTOR (vdrmota/contact-info-scraper) with startUrls format
     const run = await startActor(APIFY_ACTORS.EMAIL_EXTRACTOR, {
       startUrls: urls.map(url => ({ url })),
+      maxDepth: 1,
+      maxRequestsPerStartUrl: 5,
+      sameDomain: true,
     });
 
     await supabase
@@ -1050,9 +1053,17 @@ async function handleEmailScrapeResults(
   // Track which influencers already got an email in this batch to avoid overwriting
   const influencerEmailSet = new Set<string>();
 
+  // Build normalized URL index for faster matching
+  const normalizedLinkMap = new Map<string, { link_id: string; influencer_id: string }>();
+  for (const [mapUrl, mapInfo] of Object.entries(linkMap)) {
+    normalizedLinkMap.set(normalizeUrl(mapUrl), mapInfo);
+  }
+
   for (const item of items) {
     const result = item as Record<string, unknown>;
-    const scrapedUrl = (result.sourceUrl ?? result.url ?? result.inputUrl ?? result.link) as string | undefined;
+    // vdrmota/contact-info-scraper returns: url (current page), referrerUrl (parent page), emails[]
+    const pageUrl = result.url as string | undefined;
+    const referrerUrl = result.referrerUrl as string | undefined;
     const emails = (result.emails ?? result.email) as string[] | string | undefined;
 
     // Normalize emails to array
@@ -1064,19 +1075,14 @@ async function handleEmailScrapeResults(
     }
 
     // Try to match this result back to a link via URL
+    // Priority: direct URL match → referrerUrl match (for depth>0 pages)
     let matchedLink: { link_id: string; influencer_id: string } | null = null;
 
-    if (scrapedUrl && linkMap[scrapedUrl]) {
-      matchedLink = linkMap[scrapedUrl];
-    } else if (scrapedUrl) {
-      // Normalize URL for matching: handles HTTP/HTTPS, www, trailing slashes, query params
-      const normalizedScraped = normalizeUrl(scrapedUrl);
-      for (const [mapUrl, mapInfo] of Object.entries(linkMap)) {
-        if (normalizeUrl(mapUrl) === normalizedScraped) {
-          matchedLink = mapInfo;
-          break;
-        }
-      }
+    if (pageUrl) {
+      matchedLink = linkMap[pageUrl] ?? normalizedLinkMap.get(normalizeUrl(pageUrl)) ?? null;
+    }
+    if (!matchedLink && referrerUrl) {
+      matchedLink = linkMap[referrerUrl] ?? normalizedLinkMap.get(normalizeUrl(referrerUrl)) ?? null;
     }
 
     if (!matchedLink) {
@@ -1109,14 +1115,16 @@ async function handleEmailScrapeResults(
         const foundEmail = emailList[0];
         // Extract domain from the source URL for email_source
         // Format: "linktree:https://linktr.ee/username" to include source info
-        let emailSource = "linktree";
-        if (scrapedUrl) {
+        // Use referrerUrl (original start URL) or pageUrl for source tracking
+        const sourceUrl = referrerUrl ?? pageUrl;
+        let emailSource = "web-scraper";
+        if (sourceUrl) {
           try {
-            const urlObj = new URL(scrapedUrl);
+            const urlObj = new URL(sourceUrl);
             const domain = urlObj.hostname.replace("www.", "");
-            emailSource = `${domain}:${scrapedUrl}`;
+            emailSource = `${domain}:${sourceUrl}`;
           } catch {
-            emailSource = `link:${scrapedUrl}`;
+            emailSource = `link:${sourceUrl}`;
           }
         }
 
@@ -1139,9 +1147,16 @@ async function handleEmailScrapeResults(
   const processedLinkIds = new Set<string>();
   for (const item of items) {
     const result = item as Record<string, unknown>;
-    const scrapedUrl = (result.sourceUrl ?? result.url ?? result.inputUrl ?? result.link) as string | undefined;
-    if (scrapedUrl && linkMap[scrapedUrl]) {
-      processedLinkIds.add(linkMap[scrapedUrl].link_id);
+    const itemUrl = result.url as string | undefined;
+    const itemReferrer = result.referrerUrl as string | undefined;
+    // Match by direct URL or referrer URL
+    if (itemUrl) {
+      const match = linkMap[itemUrl] ?? normalizedLinkMap.get(normalizeUrl(itemUrl));
+      if (match) processedLinkIds.add(match.link_id);
+    }
+    if (itemReferrer) {
+      const match = linkMap[itemReferrer] ?? normalizedLinkMap.get(normalizeUrl(itemReferrer));
+      if (match) processedLinkIds.add(match.link_id);
     }
   }
 
@@ -1326,9 +1341,14 @@ async function autoTriggerWebEmailExtraction(
       return null;
     }
 
-    // Start EMAIL_EXTRACTOR with all URLs in a single batch run
+    // Start EMAIL_EXTRACTOR (vdrmota/contact-info-scraper) with all URLs in a single batch run
     try {
-      const run = await startActor(APIFY_ACTORS.EMAIL_EXTRACTOR, { urls: batchUrls });
+      const run = await startActor(APIFY_ACTORS.EMAIL_EXTRACTOR, {
+        startUrls: batchUrls.map(url => ({ url })),
+        maxDepth: 1,
+        maxRequestsPerStartUrl: 5,
+        sameDomain: true,
+      });
 
       await supabase
         .from("extraction_jobs")

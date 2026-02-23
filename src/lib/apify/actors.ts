@@ -17,11 +17,8 @@ export const APIFY_ACTORS = {
   // Video Download
   VIDEO_DOWNLOADER: "easyapi/all-in-one-media-downloader",
 
-  // Email Extraction (bio links)
-  EMAIL_EXTRACTOR: "ahmed_jasarevic/linktree-beacons-bio-email-scraper-extract-leads",
-
-  // Cross-platform email extraction (YouTube, TikTok, Twitter, Instagram by user ID)
-  SOCIAL_EMAIL_SCRAPER: "chitosibug3/social-media-email-scraper-2026",
+  // Email & Contact Info Extraction (any URL - Linktree, Littly, personal sites, etc.)
+  EMAIL_EXTRACTOR: "vdrmota/contact-info-scraper",
 
   // Content Metrics
   SOCIAL_INSIGHT: "insiteco/social-insight-scraper",
@@ -201,11 +198,9 @@ export function getDefaultInput(
     case APIFY_ACTORS.EMAIL_EXTRACTOR:
       return {
         startUrls: [],
-      };
-    case APIFY_ACTORS.SOCIAL_EMAIL_SCRAPER:
-      return {
-        items: [],
-        ...extra,
+        maxDepth: 1,
+        maxRequestsPerStartUrl: 5,
+        sameDomain: true,
       };
     default:
       return {};

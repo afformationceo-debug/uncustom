@@ -63,13 +63,13 @@ console.log(`Job ID: ${job.id}`);
 // ── Step 3: Launch Email Extractor with startUrls format ──
 console.log('\n=== Launching Email Extractor ===');
 
-const actorId = 'ahmed_jasarevic~linktree-beacons-bio-email-scraper-extract-leads';
+const actorId = 'vdrmota~contact-info-scraper';
 const startUrl = `https://api.apify.com/v2/acts/${actorId}/runs?token=${apifyToken}`;
 
 const res = await fetch(startUrl, {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ startUrls }),
+  body: JSON.stringify({ startUrls, maxDepth: 1, maxRequestsPerStartUrl: 5, sameDomain: true }),
 });
 
 if (!res.ok) {
@@ -113,30 +113,45 @@ while (!done) {
     let emailsFound = 0;
     let linksProcessed = 0;
 
+    // Build normalized URL index for faster matching
+    const normalizedLinkMap = new Map();
+    for (const [mapUrl, mapInfo] of Object.entries(linkMap)) {
+      try {
+        const mu = new URL(mapUrl);
+        const normMap = `https://${mu.hostname.replace(/^www\./, '')}${mu.pathname.replace(/\/+$/, '')}`.toLowerCase();
+        normalizedLinkMap.set(normMap, mapInfo);
+      } catch {}
+    }
+
     for (const item of items) {
-      const scrapedUrl = item.sourceUrl || item.url || item.inputUrl || item.link;
+      // vdrmota/contact-info-scraper returns: url (page), referrerUrl (parent), emails[]
+      const pageUrl = item.url;
+      const referrerUrl = item.referrerUrl;
       const emails = item.emails || item.email || [];
       const emailList = Array.isArray(emails)
         ? emails.filter(e => typeof e === 'string' && e.includes('@'))
         : (typeof emails === 'string' && emails.includes('@')) ? [emails] : [];
 
-      if (!scrapedUrl) continue;
+      if (!pageUrl) continue;
 
-      // Match URL
-      let matched = linkMap[scrapedUrl];
-      if (!matched) {
-        // Normalize
+      // Match by direct URL or referrerUrl
+      let matched = linkMap[pageUrl];
+      if (!matched && pageUrl) {
         try {
-          const u = new URL(scrapedUrl);
+          const u = new URL(pageUrl);
           const norm = `https://${u.hostname.replace(/^www\./, '')}${u.pathname.replace(/\/+$/, '')}`.toLowerCase();
-          for (const [mapUrl, mapInfo] of Object.entries(linkMap)) {
-            try {
-              const mu = new URL(mapUrl);
-              const normMap = `https://${mu.hostname.replace(/^www\./, '')}${mu.pathname.replace(/\/+$/, '')}`.toLowerCase();
-              if (normMap === norm) { matched = mapInfo; break; }
-            } catch {}
-          }
+          matched = normalizedLinkMap.get(norm);
         } catch {}
+      }
+      if (!matched && referrerUrl) {
+        matched = linkMap[referrerUrl];
+        if (!matched) {
+          try {
+            const u = new URL(referrerUrl);
+            const norm = `https://${u.hostname.replace(/^www\./, '')}${u.pathname.replace(/\/+$/, '')}`.toLowerCase();
+            matched = normalizedLinkMap.get(norm);
+          } catch {}
+        }
       }
 
       if (!matched) continue;
@@ -158,9 +173,10 @@ while (!done) {
           .single();
 
         if (inf && !inf.email) {
-          let emailSource = 'link';
+          const sourceUrl = referrerUrl || pageUrl;
+          let emailSource = 'web-scraper';
           try {
-            emailSource = `${new URL(scrapedUrl).hostname.replace('www.', '')}:${scrapedUrl}`;
+            emailSource = `${new URL(sourceUrl).hostname.replace('www.', '')}:${sourceUrl}`;
           } catch {}
 
           await supabase.from('influencers').update({
@@ -176,8 +192,21 @@ while (!done) {
     // Mark remaining unprocessed links as scraped (no email found)
     const processedLinkIds = new Set();
     for (const item of items) {
-      const url = item.sourceUrl || item.url || item.inputUrl || item.link;
-      if (url && linkMap[url]) processedLinkIds.add(linkMap[url].link_id);
+      const pUrl = item.url;
+      const rUrl = item.referrerUrl;
+      if (pUrl && linkMap[pUrl]) processedLinkIds.add(linkMap[pUrl].link_id);
+      if (rUrl && linkMap[rUrl]) processedLinkIds.add(linkMap[rUrl].link_id);
+      // Also try normalized matching
+      for (const [url, match] of [
+        [pUrl, null], [rUrl, null]
+      ].filter(([u]) => u)) {
+        try {
+          const u = new URL(url);
+          const norm = `https://${u.hostname.replace(/^www\./, '')}${u.pathname.replace(/\/+$/, '')}`.toLowerCase();
+          const m = normalizedLinkMap.get(norm);
+          if (m) processedLinkIds.add(m.link_id);
+        } catch {}
+      }
     }
     const unprocessedLinks = links.filter(l => !processedLinkIds.has(l.id));
     for (const link of unprocessedLinks) {
