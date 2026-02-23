@@ -163,7 +163,7 @@ export function getDefaultInput(
       return {
         hashtags: [keyword],
         resultsLimit: limit,
-        resultsType: "posts",
+        resultsType: "reels",
         ...extra,
       };
     case APIFY_ACTORS.INSTAGRAM_TAGGED:
