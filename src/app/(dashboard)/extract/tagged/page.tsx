@@ -492,7 +492,7 @@ export default function MasterTaggedPage() {
 
       {/* Accounts Table */}
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -502,23 +502,24 @@ export default function MasterTaggedPage() {
                     onCheckedChange={(checked) => handleSelectAll(!!checked)}
                   />
                 </TableHead>
-                <TableHead>유저네임</TableHead>
+                <TableHead className="min-w-[220px]">계정</TableHead>
                 <TableHead>플랫폼</TableHead>
+                <TableHead>팔로워</TableHead>
+                <TableHead className="min-w-[200px]">바이오</TableHead>
                 <TableHead>국가</TableHead>
-                <TableHead>검증</TableHead>
+                <TableHead>상태</TableHead>
                 <TableHead>등록일</TableHead>
-                <TableHead className="w-20">링크</TableHead>
                 <TableHead className="w-16" />
               </TableRow>
             </TableHeader>
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={8} className="text-center py-12 text-muted-foreground">로딩 중...</TableCell>
+                  <TableCell colSpan={9} className="text-center py-12 text-muted-foreground">로딩 중...</TableCell>
                 </TableRow>
               ) : filteredAccounts.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={8} className="text-center py-12">
+                  <TableCell colSpan={9} className="text-center py-12">
                     <div className="flex flex-col items-center gap-2 text-muted-foreground">
                       <AtSign className="w-8 h-8 opacity-30" />
                       <p className="font-medium">태그 계정이 없습니다</p>
@@ -530,6 +531,9 @@ export default function MasterTaggedPage() {
                 filteredAccounts.map((acc) => {
                   const vState = verifyStates[acc.id];
                   const countryInfo = getCountryInfo(acc.target_country ?? "ALL");
+                  const profileUrl = getProfileUrl(acc.account_username, acc.platform);
+                  const isVerified = vState?.verified === true;
+                  const profile = vState?.profile;
                   return (
                     <TableRow key={acc.id} className={selectedIds.has(acc.id) ? "bg-primary/5" : ""}>
                       <TableCell onClick={(e) => e.stopPropagation()}>
@@ -538,31 +542,78 @@ export default function MasterTaggedPage() {
                           onCheckedChange={(checked) => handleSelectOne(acc.id, !!checked)}
                         />
                       </TableCell>
+                      {/* 계정: 프로필사진 + 이름 + @유저네임 (클릭 시 실제 프로필 링크) */}
                       <TableCell>
-                        <div className="flex items-center gap-2">
-                          {/* Verified profile image */}
-                          {vState?.verified && vState.profile?.profile_image_url && (
-                            <img
-                              src={vState.profile.profile_image_url}
-                              alt=""
-                              className="w-7 h-7 rounded-full object-cover border"
-                            />
+                        <div className="flex items-center gap-2.5">
+                          {isVerified && profile?.profile_image_url ? (
+                            <a href={profileUrl} target="_blank" rel="noopener noreferrer" className="shrink-0">
+                              <img
+                                src={profile.profile_image_url}
+                                alt={acc.account_username}
+                                className="w-9 h-9 rounded-full object-cover border hover:ring-2 hover:ring-primary/30 transition-shadow"
+                              />
+                            </a>
+                          ) : (
+                            <div className="w-9 h-9 rounded-full bg-muted flex items-center justify-center shrink-0">
+                              <AtSign className="w-4 h-4 text-muted-foreground" />
+                            </div>
                           )}
-                          <div>
-                            <span className="font-medium text-sm">@{acc.account_username}</span>
-                            {vState?.verified && vState.profile?.follower_count != null && (
-                              <span className="text-[10px] text-muted-foreground ml-2">
-                                {vState.profile.follower_count.toLocaleString()} followers
-                              </span>
+                          <div className="min-w-0">
+                            {isVerified && profile?.display_name && (
+                              <p className="text-sm font-medium truncate leading-tight">
+                                {profile.display_name}
+                              </p>
                             )}
+                            <a
+                              href={profileUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                            >
+                              @{acc.account_username}
+                              <ExternalLink className="w-3 h-3 shrink-0" />
+                            </a>
                           </div>
                         </div>
                       </TableCell>
+                      {/* 플랫폼 */}
                       <TableCell>
                         <Badge variant="outline" className={`text-xs ${PLATFORM_BADGE[acc.platform] ?? ""}`}>
                           {PLATFORMS.find((p) => p.value === acc.platform)?.label ?? acc.platform}
                         </Badge>
                       </TableCell>
+                      {/* 팔로워 */}
+                      <TableCell>
+                        {isVerified && profile?.follower_count != null ? (
+                          <span className="text-sm font-medium tabular-nums">
+                            {profile.follower_count >= 1_000_000
+                              ? `${(profile.follower_count / 1_000_000).toFixed(1)}M`
+                              : profile.follower_count >= 1_000
+                                ? `${(profile.follower_count / 1_000).toFixed(1)}K`
+                                : profile.follower_count.toLocaleString()}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">-</span>
+                        )}
+                      </TableCell>
+                      {/* 바이오 */}
+                      <TableCell>
+                        {isVerified && profile?.bio ? (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <p className="text-xs text-muted-foreground line-clamp-2 max-w-[240px] cursor-default">
+                                {profile.bio}
+                              </p>
+                            </TooltipTrigger>
+                            <TooltipContent side="bottom" className="max-w-sm">
+                              <p className="text-xs whitespace-pre-wrap">{profile.bio}</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">-</span>
+                        )}
+                      </TableCell>
+                      {/* 국가 */}
                       <TableCell>
                         {countryInfo.flag ? (
                           <Badge variant="outline" className="text-xs">
@@ -572,37 +623,36 @@ export default function MasterTaggedPage() {
                           <Badge variant="secondary" className="text-[10px]">전체</Badge>
                         )}
                       </TableCell>
+                      {/* 검증 상태 */}
                       <TableCell>
                         {vState?.loading ? (
-                          <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
-                        ) : vState?.verified === true ? (
-                          <Tooltip>
-                            <TooltipTrigger>
-                              <CheckCircle2 className="w-4 h-4 text-green-500" />
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              {vState.profile?.display_name && <p className="font-medium">{vState.profile.display_name}</p>}
-                              {vState.profile?.bio && <p className="text-xs max-w-xs truncate">{vState.profile.bio}</p>}
-                            </TooltipContent>
-                          </Tooltip>
+                          <div className="flex items-center gap-1.5">
+                            <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+                            <span className="text-[10px] text-muted-foreground">검증 중</span>
+                          </div>
+                        ) : isVerified ? (
+                          <Badge variant="outline" className="text-[10px] border-green-300 bg-green-50 text-green-700 dark:border-green-700 dark:bg-green-950 dark:text-green-400 gap-1">
+                            <CheckCircle2 className="w-3 h-3" />
+                            확인됨
+                          </Badge>
                         ) : vState?.verified === false ? (
-                          <Tooltip>
-                            <TooltipTrigger>
-                              <XCircle className="w-4 h-4 text-destructive/60" />
-                            </TooltipTrigger>
-                            <TooltipContent>계정을 찾을 수 없습니다</TooltipContent>
-                          </Tooltip>
+                          <Badge variant="outline" className="text-[10px] border-red-300 bg-red-50 text-red-600 dark:border-red-700 dark:bg-red-950 dark:text-red-400 gap-1">
+                            <XCircle className="w-3 h-3" />
+                            미확인
+                          </Badge>
                         ) : (
                           <Button
-                            variant="ghost"
+                            variant="outline"
                             size="sm"
-                            className="h-6 px-2 text-[10px]"
+                            className="h-6 px-2.5 text-[10px]"
                             onClick={() => verifyAccount(acc.id, acc.account_username, acc.platform)}
                           >
+                            <Search className="w-3 h-3 mr-1" />
                             검증
                           </Button>
                         )}
                       </TableCell>
+                      {/* 등록일 */}
                       <TableCell>
                         <Tooltip>
                           <TooltipTrigger asChild>
@@ -615,16 +665,7 @@ export default function MasterTaggedPage() {
                           </TooltipContent>
                         </Tooltip>
                       </TableCell>
-                      <TableCell>
-                        <a
-                          href={getProfileUrl(acc.account_username, acc.platform)}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
-                        >
-                          프로필 <ExternalLink className="w-3 h-3" />
-                        </a>
-                      </TableCell>
+                      {/* 삭제 */}
                       <TableCell>
                         <Button variant="ghost" size="sm" onClick={() => handleDelete(acc.id)}>
                           <Trash2 className="w-4 h-4 text-destructive/70" />
