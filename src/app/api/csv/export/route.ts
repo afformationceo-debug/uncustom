@@ -28,11 +28,15 @@ export async function GET(request: Request) {
 
     if (platform !== "all") query = query.eq("platform", platform);
     if (search) {
-      query = query.or(`username.ilike.%${search}%,display_name.ilike.%${search}%,email.ilike.%${search}%`);
+      const escaped = search.replace(/[%_\\]/g, (c) => `\\${c}`);
+      query = query.or(`username.ilike.%${escaped}%,display_name.ilike.%${escaped}%,email.ilike.%${escaped}%`);
     }
     if (emailFilter === "with") query = query.not("email", "is", null);
     else if (emailFilter === "without") query = query.is("email", null);
-    if (country) query = query.ilike("country", `%${country}%`);
+    if (country) {
+      const escapedCountry = country.replace(/[%_\\]/g, (c) => `\\${c}`);
+      query = query.ilike("country", `%${escapedCountry}%`);
+    }
     if (verified === "yes") query = query.eq("is_verified", true);
     else if (verified === "no") query = query.eq("is_verified", false);
     if (followerMin) query = query.gte("follower_count", parseInt(followerMin));

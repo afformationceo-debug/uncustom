@@ -220,6 +220,15 @@ export default function MasterExtractPage() {
           } else {
             toast.error(`추출 실패: ${result.error ?? "알 수 없는 오류"}`);
           }
+        } else if (result.status === "running" && result.total_extracted != null) {
+          // Update real-time extraction count while RUNNING
+          setJobs((prev) =>
+            prev.map((j) =>
+              j.id === jobId
+                ? { ...j, total_extracted: result.total_extracted ?? j.total_extracted }
+                : j
+            )
+          );
         }
       } catch { /* polling error, silently ignore */ }
     }, 5000);
@@ -766,7 +775,91 @@ export default function MasterExtractPage() {
         </Card>
       </div>
 
-      {/* Extraction Jobs History */}
+      {/* ================================================================
+       * ACTIVE JOBS - Running/Pending shown as prominent cards
+       * ================================================================ */}
+      {(() => {
+        const activeJobs = jobs.filter((j) => j.status === "running" || j.status === "pending");
+        if (activeJobs.length === 0) return null;
+        return (
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />
+              <h3 className="font-semibold text-sm">실행 중인 작업</h3>
+              <Badge className="text-[10px] bg-primary/10 text-primary border-primary/20">{activeJobs.length}</Badge>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {activeJobs.map((job) => {
+                const extracted = job.total_extracted ?? 0;
+                const cfg = job.input_config as Record<string, unknown> | null;
+                const limit = Number(cfg?.resultsLimit ?? cfg?.resultsPerPage ?? cfg?.maxResults ?? cfg?.maxItems ?? 0);
+                const progress = limit > 0 && extracted > 0 ? Math.min((extracted / limit) * 100, 100) : 0;
+                const typeLabels: Record<string, string> = { keyword: "키워드 추출", tagged: "태그 추출", enrich: "프로필 보강", email_scrape: "이메일 추출", email_social: "소셜 이메일" };
+                const typeIcons: Record<string, typeof Zap> = { keyword: SearchIcon, tagged: AtSign, enrich: Sparkles, email_scrape: Zap, email_social: Zap };
+                const TypeIcon = typeIcons[job.type] ?? Zap;
+
+                return (
+                  <Card key={job.id} className="border-primary/30 bg-primary/[0.02] overflow-hidden">
+                    <CardContent className="p-4 space-y-3">
+                      <div className="flex items-start justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${PLATFORM_COLORS[job.platform] ?? "bg-muted"}`}>
+                            <TypeIcon className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <p className="font-semibold text-sm">{getSourceName(job)}</p>
+                            <div className="flex items-center gap-1.5 mt-0.5">
+                              <Badge variant="outline" className={`text-[9px] px-1 py-0 ${PLATFORM_COLORS[job.platform] ?? ""}`}>
+                                {PLATFORM_LABELS[job.platform] ?? job.platform}
+                              </Badge>
+                              <span className="text-[10px] text-muted-foreground">{typeLabels[job.type] ?? job.type}</span>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1.5 text-primary">
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          <span className="text-xs font-medium">
+                            {job.status === "pending" ? "대기 중" : "추출 중"}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Progress bar */}
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-muted-foreground">진행률</span>
+                          <span className="font-medium">
+                            {extracted > 0 ? (
+                              <span className="text-primary">{extracted.toLocaleString()}건</span>
+                            ) : (
+                              <span className="text-muted-foreground">시작 중...</span>
+                            )}
+                            {limit > 0 && <span className="text-muted-foreground"> / {limit.toLocaleString()}</span>}
+                          </span>
+                        </div>
+                        <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-primary rounded-full transition-all duration-700 ease-out"
+                            style={{ width: `${progress > 0 ? Math.max(progress, 5) : 0}%` }}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="text-[10px] text-muted-foreground">
+                        시작: {job.started_at ? new Date(job.started_at).toLocaleString("ko-KR") : "-"}
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ================================================================
+       * COMPLETED JOBS - Grouped by date with filters
+       * ================================================================ */}
       <Card>
         <CardContent className="p-0">
           <div className="flex items-center justify-between p-4 border-b">
@@ -799,125 +892,183 @@ export default function MasterExtractPage() {
               </Button>
             </div>
           </div>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>타입</TableHead>
-                <TableHead>소스</TableHead>
-                <TableHead>플랫폼</TableHead>
-                <TableHead>상태</TableHead>
-                <TableHead className="text-right">요청</TableHead>
-                <TableHead className="text-right">추출</TableHead>
-                <TableHead className="text-right">신규</TableHead>
-                <TableHead>시작</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {loading ? (
-                <TableRow>
-                  <TableCell colSpan={8} className="text-center py-12 text-muted-foreground">
-                    <Loader2 className="w-5 h-5 animate-spin mx-auto mb-2" />로딩 중...
-                  </TableCell>
-                </TableRow>
-              ) : filteredJobs.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={8} className="text-center py-12">
-                    <Zap className="w-8 h-8 opacity-10 mx-auto mb-2" />
-                    <p className="text-sm text-muted-foreground">
-                      {jobFilter === "all" ? "추출 작업이 없습니다" : `${jobFilter === "running" ? "실행 중인" : jobFilter === "completed" ? "완료된" : "실패한"} 작업이 없습니다`}
-                    </p>
-                  </TableCell>
-                </TableRow>
-              ) : filteredJobs.slice(0, 50).map((job, idx) => (
-                <TableRow key={job.id || `job-${idx}`}>
-                  <TableCell>
-                    <Badge variant="outline" className="text-[10px]">
-                      {{ keyword: "키워드", tagged: "태그", enrich: "보강", email_scrape: "이메일", email_social: "소셜이메일" }[job.type] ?? job.type}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="font-medium text-sm">{getSourceName(job)}</TableCell>
-                  <TableCell>
-                    <Badge variant="outline" className={`text-[10px] ${PLATFORM_COLORS[job.platform] ?? ""}`}>
-                      {PLATFORM_LABELS[job.platform] ?? job.platform}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex items-center gap-1.5">
-                      {(job.status === "running" || job.status === "pending") && (
-                        <Loader2 className="w-3 h-3 animate-spin text-primary" />
-                      )}
-                      {job.status === "completed" && <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />}
-                      {job.status === "failed" && <XCircle className="w-3.5 h-3.5 text-destructive" />}
-                      <span className={`text-xs font-medium ${
-                        job.status === "completed" ? "text-green-600" :
-                        job.status === "failed" ? "text-destructive" :
-                        job.status === "running" ? "text-primary" : "text-muted-foreground"
-                      }`}>
-                        {{ pending: "대기", running: "추출 중", completed: "완료", failed: "실패" }[job.status] ?? job.status}
-                      </span>
-                    </div>
-                  </TableCell>
-                  <TableCell className="text-right text-xs text-muted-foreground">
-                    {(() => {
-                      const cfg = job.input_config as Record<string, unknown> | null;
-                      const limit = cfg?.resultsLimit ?? cfg?.resultsPerPage ?? cfg?.maxResults ?? cfg?.maxItems ?? null;
-                      return limit != null ? Number(limit).toLocaleString() : "-";
-                    })()}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    {(() => {
-                      const extracted = job.total_extracted ?? 0;
-                      const cfg = job.input_config as Record<string, unknown> | null;
-                      const limit = Number(cfg?.resultsLimit ?? cfg?.resultsPerPage ?? cfg?.maxResults ?? cfg?.maxItems ?? 0);
-                      const isShort = job.status === "completed" && limit > 0 && extracted < limit;
-                      const shortReason = job.type === "keyword" || job.type === "tagged"
-                        ? "동일 사용자 중복 제거됨 (1인 = 여러 게시물)"
-                        : job.type === "enrich"
-                          ? "보강 대상 인플루언서 수"
-                          : "추출 결과";
 
-                      if (isShort) {
+          {loading ? (
+            <div className="text-center py-12 text-muted-foreground">
+              <Loader2 className="w-5 h-5 animate-spin mx-auto mb-2" />로딩 중...
+            </div>
+          ) : filteredJobs.length === 0 ? (
+            <div className="text-center py-12">
+              <Zap className="w-8 h-8 opacity-10 mx-auto mb-2" />
+              <p className="text-sm text-muted-foreground">
+                {jobFilter === "all" ? "추출 작업이 없습니다" : `${jobFilter === "running" ? "실행 중인" : jobFilter === "completed" ? "완료된" : "실패한"} 작업이 없습니다`}
+              </p>
+            </div>
+          ) : (
+            <div className="divide-y">
+              {(() => {
+                // Group jobs by date
+                const grouped: Record<string, ExtractionJob[]> = {};
+                for (const job of filteredJobs.slice(0, 50)) {
+                  const dateStr = job.started_at
+                    ? new Date(job.started_at).toLocaleDateString("ko-KR", { year: "numeric", month: "long", day: "numeric" })
+                    : "날짜 없음";
+                  if (!grouped[dateStr]) grouped[dateStr] = [];
+                  grouped[dateStr].push(job);
+                }
+
+                return Object.entries(grouped).map(([dateLabel, dateJobs]) => {
+                  const completedCount = dateJobs.filter((j) => j.status === "completed").length;
+                  const failedCount = dateJobs.filter((j) => j.status === "failed").length;
+                  const totalExtractedInGroup = dateJobs.filter((j) => j.status === "completed").reduce((s, j) => s + (j.total_extracted ?? 0), 0);
+
+                  return (
+                    <div key={dateLabel}>
+                      {/* Date header */}
+                      <div className="flex items-center justify-between px-4 py-2 bg-muted/30 sticky top-0 z-10">
+                        <span className="text-xs font-semibold text-muted-foreground">{dateLabel}</span>
+                        <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
+                          {completedCount > 0 && (
+                            <span className="flex items-center gap-1">
+                              <CheckCircle2 className="w-3 h-3 text-green-500" />
+                              {completedCount}건 완료
+                            </span>
+                          )}
+                          {failedCount > 0 && (
+                            <span className="flex items-center gap-1">
+                              <XCircle className="w-3 h-3 text-destructive" />
+                              {failedCount}건 실패
+                            </span>
+                          )}
+                          {totalExtractedInGroup > 0 && (
+                            <span className="font-medium text-foreground">{totalExtractedInGroup.toLocaleString()}명 추출</span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Jobs in this date group */}
+                      {dateJobs.map((job, idx) => {
+                        const extracted = job.total_extracted ?? 0;
+                        const newCount = job.new_extracted ?? 0;
+                        const cfg = job.input_config as Record<string, unknown> | null;
+                        const limit = Number(cfg?.resultsLimit ?? cfg?.resultsPerPage ?? cfg?.maxResults ?? cfg?.maxItems ?? 0);
+                        const isShort = job.status === "completed" && limit > 0 && extracted < limit;
+                        const typeLabels: Record<string, { label: string; color: string }> = {
+                          keyword: { label: "키워드", color: "bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300" },
+                          tagged: { label: "태그", color: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300" },
+                          enrich: { label: "보강", color: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300" },
+                          email_scrape: { label: "이메일", color: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300" },
+                          email_social: { label: "소셜이메일", color: "bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300" },
+                        };
+                        const typeInfo = typeLabels[job.type] ?? { label: job.type, color: "bg-muted text-muted-foreground" };
+
                         return (
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <span className="font-medium text-amber-600 cursor-help">
-                                {extracted.toLocaleString()}
-                                <span className="text-[9px] ml-0.5">⚠</span>
-                              </span>
-                            </TooltipTrigger>
-                            <TooltipContent side="left" className="max-w-[240px]">
-                              <p className="text-xs font-medium">요청: {limit.toLocaleString()} → 결과: {extracted.toLocaleString()}</p>
-                              <p className="text-[10px] text-muted-foreground mt-0.5">{shortReason}</p>
-                            </TooltipContent>
-                          </Tooltip>
+                          <div
+                            key={job.id || `job-${idx}`}
+                            className={`flex items-center gap-3 px-4 py-2.5 hover:bg-muted/20 transition-colors ${
+                              job.status === "failed" ? "opacity-60" : ""
+                            }`}
+                          >
+                            {/* Status indicator */}
+                            <div className="flex-shrink-0">
+                              {(job.status === "running" || job.status === "pending") && (
+                                <div className="w-6 h-6 rounded-full bg-primary/10 flex items-center justify-center">
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />
+                                </div>
+                              )}
+                              {job.status === "completed" && (
+                                <div className="w-6 h-6 rounded-full bg-green-500/10 flex items-center justify-center">
+                                  <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />
+                                </div>
+                              )}
+                              {job.status === "failed" && (
+                                <div className="w-6 h-6 rounded-full bg-destructive/10 flex items-center justify-center">
+                                  <XCircle className="w-3.5 h-3.5 text-destructive" />
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Type badge */}
+                            <Badge className={`text-[10px] px-1.5 py-0 border-0 font-medium ${typeInfo.color}`}>
+                              {typeInfo.label}
+                            </Badge>
+
+                            {/* Source name */}
+                            <span className="font-medium text-sm min-w-0 truncate">{getSourceName(job)}</span>
+
+                            {/* Platform */}
+                            <Badge variant="outline" className={`text-[9px] px-1 py-0 flex-shrink-0 ${PLATFORM_COLORS[job.platform] ?? ""}`}>
+                              {PLATFORM_LABELS[job.platform] ?? job.platform}
+                            </Badge>
+
+                            {/* Spacer */}
+                            <div className="flex-1" />
+
+                            {/* Stats */}
+                            <div className="flex items-center gap-3 flex-shrink-0">
+                              {/* Request count */}
+                              {limit > 0 && (
+                                <span className="text-[10px] text-muted-foreground">
+                                  요청 {limit.toLocaleString()}
+                                </span>
+                              )}
+
+                              {/* Extracted count */}
+                              {(job.status === "running" || job.status === "pending") ? (
+                                <span className="flex items-center gap-1 text-xs text-primary font-medium min-w-[50px] justify-end">
+                                  <Loader2 className="w-3 h-3 animate-spin" />
+                                  {extracted > 0 ? extracted.toLocaleString() : "-"}
+                                </span>
+                              ) : (
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <span className={`text-xs font-semibold min-w-[50px] text-right ${
+                                      isShort ? "text-amber-600 cursor-help" : "text-foreground"
+                                    }`}>
+                                      {extracted.toLocaleString()}
+                                      {isShort && <span className="text-[9px] ml-0.5">⚠</span>}
+                                    </span>
+                                  </TooltipTrigger>
+                                  {isShort && (
+                                    <TooltipContent side="left" className="max-w-[240px]">
+                                      <p className="text-xs font-medium">요청: {limit.toLocaleString()} → 결과: {extracted.toLocaleString()}</p>
+                                      <p className="text-[10px] text-muted-foreground mt-0.5">
+                                        {job.type === "keyword" || job.type === "tagged" ? "동일 사용자 중복 제거됨" : "추출 결과"}
+                                      </p>
+                                    </TooltipContent>
+                                  )}
+                                </Tooltip>
+                              )}
+
+                              {/* New count */}
+                              {newCount > 0 && (
+                                <span className="text-[10px] text-green-600 font-semibold bg-green-500/10 px-1.5 py-0.5 rounded">
+                                  +{newCount}
+                                </span>
+                              )}
+
+                              {/* Time */}
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <span className="text-[10px] text-muted-foreground w-14 text-right cursor-default">
+                                    {timeAgo(job.started_at)}
+                                  </span>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  {job.started_at ? new Date(job.started_at).toLocaleString("ko-KR") : "-"}
+                                </TooltipContent>
+                              </Tooltip>
+                            </div>
+                          </div>
                         );
-                      }
-                      return <span className="font-medium">{extracted.toLocaleString()}</span>;
-                    })()}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    {(job.new_extracted ?? 0) > 0 ? (
-                      <span className="text-green-600 font-medium">+{job.new_extracted}</span>
-                    ) : (
-                      <span className="text-muted-foreground">0</span>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <span className="text-xs text-muted-foreground cursor-default">
-                          {timeAgo(job.started_at)}
-                        </span>
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        {job.started_at ? new Date(job.started_at).toLocaleString("ko-KR") : "-"}
-                      </TooltipContent>
-                    </Tooltip>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+                      })}
+                    </div>
+                  );
+                });
+              })()}
+            </div>
+          )}
+
           {filteredJobs.length > 50 && (
             <div className="p-3 text-center text-xs text-muted-foreground border-t">
               최근 50건만 표시 (전체 {filteredJobs.length}건)

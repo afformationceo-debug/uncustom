@@ -52,9 +52,17 @@ import {
   LayoutGrid,
   Table2,
   Upload,
+  Download,
   FileSpreadsheet,
   Loader2,
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
 import type { Tables } from "@/types/database";
 import { PLATFORMS } from "@/types/platform";
@@ -1348,8 +1356,8 @@ export default function MasterPage() {
   // Expanded row
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  // View mode: card (default) or table
-  const [viewMode, setViewMode] = useState<ViewMode>("card");
+  // View mode: table (default) or card
+  const [viewMode, setViewMode] = useState<ViewMode>("table");
 
   // Video modal state
   const [modalPost, setModalPost] = useState<ContentPost | null>(null);
@@ -1395,13 +1403,17 @@ export default function MasterPage() {
     fetchInfluencers();
   }, [platformFilter, emailFilter, page, sortField, verifiedFilter, businessFilter, enrichedFilter, countryFilter, followerMin, followerMax, categoryFilter, importSourceFilter]);
 
-  useEffect(() => {
-    if (influencers.length > 0) {
-      const ids = influencers.map((inf) => inf.id);
-      fetchCampaignAssignments(ids);
-      fetchInfluencerLinks(ids);
-    }
-  }, [influencers]);
+  // Defer campaign assignments & links fetch until actually needed (expand row)
+  const assignmentsFetched = useRef(false);
+  useEffect(() => { assignmentsFetched.current = false; }, [influencers]);
+
+  async function ensureAssignmentsLoaded() {
+    if (assignmentsFetched.current || influencers.length === 0) return;
+    assignmentsFetched.current = true;
+    const ids = influencers.map((inf) => inf.id);
+    fetchCampaignAssignments(ids);
+    fetchInfluencerLinks(ids);
+  }
 
   // Selection persists across pages - no reset on page change
 
@@ -1446,7 +1458,7 @@ export default function MasterPage() {
   async function fetchCampaigns() {
     const { data } = await supabase
       .from("campaigns")
-      .select("*")
+      .select("id,name,status,created_at")
       .order("created_at", { ascending: false });
     if (data) setCampaigns(data as Campaign[]);
   }
@@ -1490,10 +1502,28 @@ export default function MasterPage() {
     }
   }
 
+  // On-demand raw_data cache for expanded rows
+  const [rawDataCache, setRawDataCache] = useState<Record<string, Record<string, unknown>>>({});
+
+  async function fetchRawData(infId: string) {
+    if (rawDataCache[infId]) return;
+    const { data } = await supabase
+      .from("influencers")
+      .select("raw_data")
+      .eq("id", infId)
+      .single();
+    if (data?.raw_data) {
+      setRawDataCache((prev) => ({ ...prev, [infId]: data.raw_data as Record<string, unknown> }));
+    }
+  }
+
+  // Select all columns EXCEPT raw_data (which is large JSONB) for performance
+  const INFLUENCER_SELECT = "id,platform,platform_id,username,display_name,profile_url,profile_image_url,email,email_source,bio,follower_count,following_count,post_count,engagement_rate,country,language,extracted_keywords,extracted_from_tags,is_verified,is_business,category,import_source,is_blue_verified,verified_type,location,heart_count,share_count,total_views,channel_joined_date,is_monetized,external_url,avg_likes,avg_comments,avg_views,avg_shares,source_content_url,source_content_text,source_content_media,source_content_created_at,content_language,content_hashtags,account_created_at,is_private,cover_image_url,bookmark_count,quote_count,favourites_count,video_duration,video_title,listed_count,media_count,is_sponsored,is_retweet,is_reply,mentions,music_info,product_type,last_updated_at,created_at";
+
   async function fetchInfluencers() {
     setLoading(true);
 
-    let query = supabase.from("influencers").select("*", { count: "exact" });
+    let query = supabase.from("influencers").select(INFLUENCER_SELECT, { count: "exact" });
 
     query = query.eq("platform", platformFilter);
     if (searchQuery) {
@@ -1710,11 +1740,11 @@ export default function MasterPage() {
     }
   }
 
-  async function handleCsvExport() {
+  async function handleCsvExport(exportPlatform?: string) {
     setCsvExporting(true);
     try {
       const params = new URLSearchParams();
-      params.set("platform", platformFilter);
+      params.set("platform", exportPlatform ?? platformFilter);
       if (searchQuery) params.set("search", searchQuery);
       if (emailFilter !== "all") params.set("email", emailFilter);
       if (countryFilter) params.set("country", countryFilter);
@@ -1796,15 +1826,46 @@ export default function MasterPage() {
             {csvImporting ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Upload className="w-4 h-4 mr-1.5" />}
             CSV 가져오기
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleCsvExport}
-            disabled={csvExporting}
-          >
-            {csvExporting ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <FileSpreadsheet className="w-4 h-4 mr-1.5" />}
-            CSV 내보내기
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={csvExporting}
+              >
+                {csvExporting ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Download className="w-4 h-4 mr-1.5" />}
+                CSV 내보내기
+                <ChevronDown className="w-3 h-3 ml-1" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuItem onClick={() => handleCsvExport(platformFilter)}>
+                <FileSpreadsheet className="w-4 h-4 mr-2" />
+                현재 플랫폼 ({PLATFORMS.find(p => p.value === platformFilter)?.label ?? platformFilter})
+                <span className="ml-auto text-xs text-muted-foreground">{total.toLocaleString()}건</span>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              {PLATFORMS.map((p) => (
+                <DropdownMenuItem key={p.value} onClick={() => handleCsvExport(p.value)}>
+                  <span className={`w-2 h-2 rounded-full mr-2 ${
+                    p.value === "instagram" ? "bg-gradient-to-r from-purple-500 to-pink-500" :
+                    p.value === "tiktok" ? "bg-black dark:bg-white" :
+                    p.value === "youtube" ? "bg-red-500" : "bg-blue-400"
+                  }`} />
+                  {p.label}
+                  <span className="ml-auto text-xs text-muted-foreground">
+                    {(platformCounts[p.value] ?? 0).toLocaleString()}건
+                  </span>
+                </DropdownMenuItem>
+              ))}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => handleCsvExport("all")}>
+                <Globe className="w-4 h-4 mr-2" />
+                전체 플랫폼
+                <span className="ml-auto text-xs text-muted-foreground">{totalAll.toLocaleString()}건</span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 
@@ -2212,7 +2273,8 @@ export default function MasterPage() {
          * ================================================================ */
         <div className="space-y-1.5">
           {influencers.map((inf) => {
-            const contentPosts = getContentPosts(inf);
+            const infWithRaw = { ...inf, raw_data: rawDataCache[inf.id] ?? inf.raw_data ?? null } as Influencer;
+            const contentPosts = getContentPosts(infWithRaw);
             const profileUrl = getProfileUrl(inf);
             const engagementVal = formatEngagement(inf.engagement_rate);
             const assignments = campaignAssignments[inf.id] ?? [];
@@ -2332,7 +2394,7 @@ export default function MasterPage() {
 
                   {/* Expand toggle */}
                   <button
-                    onClick={() => setExpandedId(isExpanded ? null : inf.id)}
+                    onClick={() => { const newId = isExpanded ? null : inf.id; setExpandedId(newId); if (newId) { fetchRawData(newId); ensureAssignmentsLoaded(); } }}
                     className="flex-shrink-0 p-1 rounded hover:bg-muted transition-colors"
                   >
                     {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
@@ -2492,7 +2554,9 @@ export default function MasterPage() {
                         // Don't toggle expand if clicking checkbox
                         if ((e.target as HTMLElement).closest('[role="checkbox"]')) return;
                         if ((e.target as HTMLElement).closest("a")) return;
-                        setExpandedId(expandedId === inf.id ? null : inf.id);
+                        const newId = expandedId === inf.id ? null : inf.id;
+                        setExpandedId(newId);
+                        if (newId) { fetchRawData(newId); ensureAssignmentsLoaded(); }
                       }}
                     >
                       <TableCell onClick={(e) => e.stopPropagation()}>
@@ -2520,7 +2584,7 @@ export default function MasterPage() {
                       <TableRow className="bg-muted/20 hover:bg-muted/20">
                         <TableCell colSpan={columns.length + 2} className="p-0">
                           <ExpandedDetail
-                            inf={inf}
+                            inf={{ ...inf, raw_data: rawDataCache[inf.id] ?? inf.raw_data ?? null } as Influencer}
                             links={influencerLinks[inf.id] ?? []}
                             assignments={campaignAssignments[inf.id] ?? []}
                             formatCount={formatCount}

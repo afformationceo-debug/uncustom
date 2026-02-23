@@ -165,7 +165,11 @@ export async function GET(request: Request) {
       return NextResponse.json({ status: "failed", error: `Apify run ${run.status}` });
     }
 
-    return NextResponse.json({ status: "running", total_extracted: job.total_extracted });
+    // Return Apify's real-time item count for RUNNING status
+    // The REST API returns stats.itemCount but the SDK types omit it
+    const runStats = run?.stats as unknown as Record<string, unknown> | undefined;
+    const itemCount = (typeof runStats?.itemCount === "number" ? runStats.itemCount : null) ?? job.total_extracted ?? 0;
+    return NextResponse.json({ status: "running", total_extracted: itemCount });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Internal server error";
     console.error("[extract/status] Error:", message, err);
