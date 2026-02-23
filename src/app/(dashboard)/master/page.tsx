@@ -1458,9 +1458,41 @@ export default function MasterPage() {
   async function fetchCampaigns() {
     const { data } = await supabase
       .from("campaigns")
-      .select("id,name,status,created_at")
+      .select("*")
       .order("created_at", { ascending: false });
     if (data) setCampaigns(data as Campaign[]);
+  }
+
+  // Auto-filter state tracking
+  const [autoFilterActive, setAutoFilterActive] = useState(false);
+
+  function handleCampaignSelect(campaignId: string) {
+    setSelectedCampaignId(campaignId);
+    if (!campaignId) {
+      setAutoFilterActive(false);
+      return;
+    }
+    const campaign = campaigns.find((c) => c.id === campaignId);
+    if (!campaign) return;
+
+    const tc = campaign.target_countries ?? [];
+    const tp = campaign.target_platforms ?? [];
+    let applied = false;
+
+    if (tp.length > 0) {
+      // Auto-apply platform filter (use first platform since filter is single-select)
+      setPlatformFilter(tp[0] as PlatformFilter);
+      applied = true;
+    }
+    if (tc.length > 0) {
+      // Auto-apply country filter (use first country)
+      setCountryFilter(tc[0]);
+      applied = true;
+    }
+    setAutoFilterActive(applied);
+    if (applied) {
+      setPage(0);
+    }
   }
 
   async function fetchCampaignAssignments(influencerIds: string[]) {
@@ -2199,20 +2231,37 @@ export default function MasterPage() {
           <UserCheck className="w-4 h-4 text-primary" />
           <span className="text-sm font-medium">{selectedIds.size}명 선택됨</span>
           <div className="h-4 w-px bg-border" />
-          <Select value={selectedCampaignId} onValueChange={setSelectedCampaignId}>
+          <Select value={selectedCampaignId} onValueChange={handleCampaignSelect}>
             <SelectTrigger className="w-64 h-9">
               <SelectValue placeholder="캠페인 선택..." />
             </SelectTrigger>
             <SelectContent>
-              {campaigns.map((c) => (
-                <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-              ))}
+              {campaigns.map((c) => {
+                const tp = c.target_platforms ?? [];
+                const tc = c.target_countries ?? [];
+                return (
+                  <SelectItem key={c.id} value={c.id}>
+                    {c.name}
+                    {(tp.length > 0 || tc.length > 0) && (
+                      <span className="text-[10px] text-muted-foreground ml-1">
+                        {tp.length > 0 && `[${tp.map((p: string) => p === "instagram" ? "IG" : p === "tiktok" ? "TT" : p === "youtube" ? "YT" : "X").join(",")}]`}
+                        {tc.length > 0 && ` ${tc.join(",")}`}
+                      </span>
+                    )}
+                  </SelectItem>
+                );
+              })}
             </SelectContent>
           </Select>
+          {autoFilterActive && (
+            <Badge variant="outline" className="text-[10px] bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800 whitespace-nowrap">
+              캠페인 타겟 필터 적용 중
+            </Badge>
+          )}
           <Button size="sm" onClick={handleAssignToCampaign} disabled={assigning || !selectedCampaignId}>
             {assigning ? "배정 중..." : "캠페인에 배정"}
           </Button>
-          <Button variant="ghost" size="sm" onClick={() => { setSelectedIds(new Set()); setSelectedCampaignId(""); }}>
+          <Button variant="ghost" size="sm" onClick={() => { setSelectedIds(new Set()); setSelectedCampaignId(""); setAutoFilterActive(false); }}>
             선택 해제
           </Button>
         </div>

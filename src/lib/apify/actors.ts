@@ -37,8 +37,12 @@ export const PLATFORM_KEYWORD_ACTORS: Record<string, string> = {
 };
 
 // Platform to Actor mapping for tagged account extraction
+// Instagram: native tagged scraper. TikTok/YouTube/Twitter: reuse keyword actors with @username search.
 export const PLATFORM_TAGGED_ACTORS: Record<string, string> = {
   instagram: APIFY_ACTORS.INSTAGRAM_TAGGED,
+  tiktok: APIFY_ACTORS.TIKTOK,
+  youtube: APIFY_ACTORS.YOUTUBE,
+  twitter: APIFY_ACTORS.TWITTER,
 };
 
 // Platform-specific default limits
@@ -175,19 +179,19 @@ export function getDefaultInput(
       };
     case APIFY_ACTORS.TIKTOK:
       return {
-        searchQueries: [keyword],
+        searchQueries: [username ? `@${username}` : keyword],
         resultsPerPage: limit,
         ...extra,
       };
     case APIFY_ACTORS.YOUTUBE:
       return {
-        searchKeywords: keyword,
+        searchKeywords: username ? `@${username}` : keyword,
         maxResults: limit,
         ...extra,
       };
     case APIFY_ACTORS.TWITTER:
       return {
-        searchTerms: [keyword],
+        searchTerms: [username ? `@${username}` : keyword],
         maxItems: limit,
         ...extra,
       };
@@ -242,6 +246,34 @@ export function estimateTaggedCost(platform: string, limit: number): number {
   const actorId = PLATFORM_TAGGED_ACTORS[platform];
   if (!actorId) return 0;
   return estimateApifyCost(actorId, limit);
+}
+
+/** Estimate full pipeline cost for tagged extraction across multiple accounts */
+export function estimateTaggedPipelineCost(
+  accounts: { platform: string; limit: number }[]
+): { extraction: number; enrichment: number; email: number; total: number } {
+  let extraction = 0;
+  let igCount = 0;
+
+  for (const acc of accounts) {
+    const actorId = PLATFORM_TAGGED_ACTORS[acc.platform];
+    if (actorId) extraction += estimateApifyCost(actorId, acc.limit);
+    if (acc.platform === "instagram") igCount += acc.limit;
+  }
+
+  // IG profile enrichment
+  const enrichment = igCount > 0
+    ? estimateApifyCost(APIFY_ACTORS.INSTAGRAM_PROFILE, igCount)
+    : 0;
+
+  // Email extraction: ~30% of all extracted influencers have external links
+  const totalExtracted = accounts.reduce((sum, a) => sum + a.limit, 0);
+  const estimatedWithLinks = Math.round(totalExtracted * 0.3);
+  const email = estimatedWithLinks > 0
+    ? estimateApifyCost(APIFY_ACTORS.EMAIL_EXTRACTOR, estimatedWithLinks)
+    : 0;
+
+  return { extraction, enrichment, email, total: extraction + enrichment + email };
 }
 
 /** Estimate full pipeline cost breakdown (extraction + IG enrichment + email extraction) */

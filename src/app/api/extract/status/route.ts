@@ -121,10 +121,13 @@ async function handleExtractionResults(
   } else if (job.type === "tagged" && job.source_id) {
     const { data: tagData } = await supabase
       .from("tagged_accounts")
-      .select("account_username")
+      .select("account_username, target_country")
       .eq("id", job.source_id)
       .single();
     sourceTag = tagData?.account_username ? `@${tagData.account_username}` : null;
+    if (tagData?.target_country && tagData.target_country !== "ALL") {
+      sourceCountry = tagData.target_country;
+    }
   }
 
   // ---------------------------------------------------------------------------

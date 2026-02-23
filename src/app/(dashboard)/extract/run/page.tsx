@@ -51,7 +51,7 @@ import { toast } from "sonner";
 import type { Tables } from "@/types/database";
 import { PLATFORMS } from "@/types/platform";
 import { useRealtime } from "@/hooks/use-realtime";
-import { PLATFORM_ADVANCED_INPUTS, type AdvancedInputField, estimateKeywordCost, estimateTaggedCost, estimatePipelineCost, PLATFORM_KEYWORD_ACTORS, APIFY_COST_ESTIMATES } from "@/lib/apify/actors";
+import { PLATFORM_ADVANCED_INPUTS, type AdvancedInputField, estimateKeywordCost, estimateTaggedCost, estimatePipelineCost, estimateTaggedPipelineCost, PLATFORM_KEYWORD_ACTORS, APIFY_COST_ESTIMATES } from "@/lib/apify/actors";
 
 type ExtractionJob = Tables<"extraction_jobs">;
 type Keyword = Tables<"keywords">;
@@ -87,7 +87,7 @@ const PLATFORM_DOT: Record<string, string> = {
   twitter: "bg-blue-400",
 };
 
-const TAGGED_SUPPORTED_PLATFORMS = ["instagram"];
+const TAGGED_SUPPORTED_PLATFORMS = ["instagram", "tiktok", "youtube", "twitter"];
 
 interface ExtractionConfig {
   limit: number;
@@ -267,7 +267,11 @@ export default function MasterExtractPage() {
   }
 
   function getEffectivePlatforms(sourceId: string, type: "keyword" | "tagged"): string[] {
-    if (type === "tagged") return [...TAGGED_SUPPORTED_PLATFORMS];
+    if (type === "tagged") {
+      // For tagged accounts, use the account's own platform
+      const acc = taggedAccounts.find((a) => a.id === sourceId);
+      return acc ? [acc.platform] : ["instagram"];
+    }
     const config = getConfig(sourceId);
     if (config.selectedPlatforms.length > 0) return config.selectedPlatforms;
     return globalPlatforms.length > 0 ? globalPlatforms : ["instagram"];
@@ -344,7 +348,7 @@ export default function MasterExtractPage() {
     setExtractingAll(type);
     const items = type === "keyword"
       ? filteredKeywords.map((kw) => ({ id: kw.id }))
-      : filteredTagged.filter((a) => TAGGED_SUPPORTED_PLATFORMS.includes(a.platform)).map((acc) => ({ id: acc.id }));
+      : filteredTagged.map((acc) => ({ id: acc.id }));
 
     let totalStarted = 0;
     let totalFailed = 0;
@@ -747,11 +751,10 @@ export default function MasterExtractPage() {
                 <h3 className="font-semibold text-sm">태그 계정 추출</h3>
                 <Badge variant="secondary" className="text-[10px]">{filteredTagged.length}</Badge>
               </div>
-              {filteredTagged.filter((a) => TAGGED_SUPPORTED_PLATFORMS.includes(a.platform)).length > 0 && (
+              {filteredTagged.length > 0 && (
                 <div className="flex items-center gap-2">
                   <span className="text-[10px] text-amber-600 dark:text-amber-400 font-medium">
                     ~${(filteredTagged
-                      .filter((a) => TAGGED_SUPPORTED_PLATFORMS.includes(a.platform))
                       .reduce((sum, acc) => sum + estimateTaggedCost(acc.platform, getConfig(acc.id).limit), 0)
                     ).toFixed(2)}
                   </span>
@@ -771,43 +774,80 @@ export default function MasterExtractPage() {
                 </div>
               ) : (
                 <>
-                  <div className="px-3 py-2 bg-amber-500/5 text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1.5">
-                    <AlertCircle className="w-3 h-3" />
-                    태그 기반 추출은 현재 Instagram만 지원합니다
+                  {/* Pipeline cost summary */}
+                  {(() => {
+                    const taggedCostAccounts = filteredTagged.map((a) => ({
+                      platform: a.platform,
+                      limit: getConfig(a.id).limit,
+                    }));
+                    if (taggedCostAccounts.length === 0) return null;
+                    const pipeline = estimateTaggedPipelineCost(taggedCostAccounts);
+                    const hasIG = taggedCostAccounts.some((a) => a.platform === "instagram");
+                    return (
+                      <div className="px-3 py-2 bg-muted/40 space-y-1.5">
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                          <Sparkles className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
+                          <span>파이프라인:</span>
+                          <span className="font-medium text-foreground">추출</span>
+                          <ArrowRight className="w-3 h-3" />
+                          {hasIG && (
+                            <>
+                              <span className="text-pink-600 dark:text-pink-400 font-medium">[IG] 프로필 보강</span>
+                              <ArrowRight className="w-3 h-3" />
+                            </>
+                          )}
+                          <span className="text-purple-600 dark:text-purple-400 font-medium">[전체] 이메일 추출</span>
+                        </div>
+                        <div className="flex items-start gap-4 text-[10px] text-muted-foreground pl-5">
+                          <div className="space-y-0.5">
+                            <span className="block">├ 추출 ({taggedCostAccounts.length}개 계정): <span className="text-amber-600 dark:text-amber-400 font-medium">~${pipeline.extraction.toFixed(2)}</span></span>
+                            {hasIG && (
+                              <span className="block">├ IG 프로필 보강: <span className="text-amber-600 dark:text-amber-400 font-medium">~${pipeline.enrichment.toFixed(2)}</span></span>
+                            )}
+                            <span className="block">├ 이메일 추출 (~30%): <span className="text-amber-600 dark:text-amber-400 font-medium">~${pipeline.email.toFixed(2)}</span></span>
+                          </div>
+                          <div className="ml-auto flex-shrink-0 text-right">
+                            <span className="text-xs font-semibold text-amber-600 dark:text-amber-400">
+                              총 ~${pipeline.total.toFixed(2)}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                  <div className="px-3 py-2 bg-blue-500/5 text-[11px] text-blue-600 dark:text-blue-400 flex items-center gap-1.5">
+                    <AlertCircle className="w-3 h-3 flex-shrink-0" />
+                    Instagram: 태그 추출 | Twitter: @멘션 검색 | TikTok/YouTube: @유저네임 검색
                   </div>
                   {filteredTagged.map((acc) => {
                     const isExpanded = expandedSettings[acc.id] ?? false;
                     const config = getConfig(acc.id);
-                    const isSupported = TAGGED_SUPPORTED_PLATFORMS.includes(acc.platform);
+                    const countryCode = (acc as TaggedAccount & { target_country?: string }).target_country;
                     return (
                       <div key={acc.id}>
-                        <div className={`flex items-center justify-between p-3 hover:bg-muted/30 transition-colors ${!isSupported ? "opacity-40" : ""}`}>
+                        <div className="flex items-center justify-between p-3 hover:bg-muted/30 transition-colors">
                           <div className="flex items-center gap-2">
                             <span className="font-medium text-sm">@{acc.account_username}</span>
                             <Badge variant="outline" className={`text-[10px] ${PLATFORM_COLORS[acc.platform]}`}>
                               {PLATFORM_LABELS[acc.platform] ?? acc.platform}
                             </Badge>
-                            {!isSupported && (
-                              <span className="text-[10px] text-amber-600">미지원</span>
+                            {countryCode && countryCode !== "ALL" && (
+                              <Badge variant="outline" className="text-[9px] px-1 py-0">{countryCode}</Badge>
                             )}
                           </div>
                           <div className="flex items-center gap-1">
-                            {isSupported && (
-                              <>
-                                <span className="text-[9px] text-amber-600 dark:text-amber-400">
-                                  ~${estimateTaggedCost(acc.platform, getConfig(acc.id).limit).toFixed(2)}
-                                </span>
-                                <Button variant="ghost" size="sm" onClick={() => toggleSettings(acc.id)} className="h-7 w-7 p-0">
-                                  <Settings className="w-3.5 h-3.5 text-muted-foreground" />
-                                </Button>
-                                <Button size="sm" onClick={() => startExtraction("tagged", acc.id)} disabled={extracting === acc.id} className="h-7 px-2">
-                                  {extracting === acc.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
-                                </Button>
-                              </>
-                            )}
+                            <span className="text-[9px] text-amber-600 dark:text-amber-400">
+                              ~${estimateTaggedCost(acc.platform, getConfig(acc.id).limit).toFixed(2)}
+                            </span>
+                            <Button variant="ghost" size="sm" onClick={() => toggleSettings(acc.id)} className="h-7 w-7 p-0">
+                              <Settings className="w-3.5 h-3.5 text-muted-foreground" />
+                            </Button>
+                            <Button size="sm" onClick={() => startExtraction("tagged", acc.id)} disabled={extracting === acc.id} className="h-7 px-2">
+                              {extracting === acc.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+                            </Button>
                           </div>
                         </div>
-                        {isExpanded && isSupported && (
+                        {isExpanded && (
                           <div className="px-3 pb-3 bg-muted/30 space-y-2 border-t border-dashed">
                             <div className="pt-2">
                               <Label className="text-xs text-muted-foreground">추출 수량</Label>

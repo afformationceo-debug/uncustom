@@ -43,13 +43,17 @@ export async function POST(request: Request) {
     } else if (type === "tagged") {
       const { data: account } = await supabase
         .from("tagged_accounts")
-        .select("account_username")
+        .select("account_username, platform")
         .eq("id", source_id)
         .single();
       if (!account) {
         return NextResponse.json({ error: "Tagged account not found" }, { status: 404 });
       }
       sourceUsername = account.account_username;
+      // If tagged account has a specific platform, narrow to that platform only
+      if (account.platform && targetPlatforms.length <= 1) {
+        targetPlatforms = [account.platform];
+      }
     }
 
     // Launch extraction jobs for each platform

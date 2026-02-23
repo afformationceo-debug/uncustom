@@ -15,8 +15,37 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Badge } from "@/components/ui/badge";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
+
+const TARGET_COUNTRIES = [
+  { value: "KR", label: "한국", flag: "\uD83C\uDDF0\uD83C\uDDF7" },
+  { value: "US", label: "미국", flag: "\uD83C\uDDFA\uD83C\uDDF8" },
+  { value: "JP", label: "일본", flag: "\uD83C\uDDEF\uD83C\uDDF5" },
+  { value: "CN", label: "중국", flag: "\uD83C\uDDE8\uD83C\uDDF3" },
+  { value: "VN", label: "베트남", flag: "\uD83C\uDDFB\uD83C\uDDF3" },
+  { value: "TH", label: "태국", flag: "\uD83C\uDDF9\uD83C\uDDED" },
+  { value: "ID", label: "인도네시아", flag: "\uD83C\uDDEE\uD83C\uDDE9" },
+  { value: "BR", label: "브라질", flag: "\uD83C\uDDE7\uD83C\uDDF7" },
+  { value: "MX", label: "멕시코", flag: "\uD83C\uDDF2\uD83C\uDDFD" },
+  { value: "ES", label: "스페인", flag: "\uD83C\uDDEA\uD83C\uDDF8" },
+  { value: "FR", label: "프랑스", flag: "\uD83C\uDDEB\uD83C\uDDF7" },
+  { value: "DE", label: "독일", flag: "\uD83C\uDDE9\uD83C\uDDEA" },
+  { value: "GB", label: "영국", flag: "\uD83C\uDDEC\uD83C\uDDE7" },
+  { value: "AU", label: "호주", flag: "\uD83C\uDDE6\uD83C\uDDFA" },
+  { value: "SG", label: "싱가포르", flag: "\uD83C\uDDF8\uD83C\uDDEC" },
+  { value: "TW", label: "대만", flag: "\uD83C\uDDF9\uD83C\uDDFC" },
+  { value: "HK", label: "홍콩", flag: "\uD83C\uDDED\uD83C\uDDF0" },
+] as const;
+
+const TARGET_PLATFORMS = [
+  { value: "instagram", label: "Instagram", dot: "bg-gradient-to-r from-purple-500 to-pink-500" },
+  { value: "tiktok", label: "TikTok", dot: "bg-black dark:bg-white" },
+  { value: "youtube", label: "YouTube", dot: "bg-red-500" },
+  { value: "twitter", label: "Twitter/X", dot: "bg-blue-400" },
+] as const;
 
 interface CampaignFormProps {
   teamId: string;
@@ -25,6 +54,8 @@ interface CampaignFormProps {
     id: string;
     name: string;
     description: string | null;
+    target_countries?: string[];
+    target_platforms?: string[];
   };
 }
 
@@ -36,8 +67,22 @@ export function CampaignForm({ teamId, trigger, campaign }: CampaignFormProps) {
   const [loading, setLoading] = useState(false);
   const [name, setName] = useState(campaign?.name ?? "");
   const [description, setDescription] = useState(campaign?.description ?? "");
+  const [targetCountries, setTargetCountries] = useState<string[]>(campaign?.target_countries ?? []);
+  const [targetPlatforms, setTargetPlatforms] = useState<string[]>(campaign?.target_platforms ?? []);
 
   const isEditing = !!campaign;
+
+  function toggleCountry(code: string) {
+    setTargetCountries((prev) =>
+      prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code]
+    );
+  }
+
+  function togglePlatform(platform: string) {
+    setTargetPlatforms((prev) =>
+      prev.includes(platform) ? prev.filter((p) => p !== platform) : [...prev, platform]
+    );
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -50,6 +95,8 @@ export function CampaignForm({ teamId, trigger, campaign }: CampaignFormProps) {
           .update({
             name: name.trim(),
             description: description.trim() || null,
+            target_countries: targetCountries,
+            target_platforms: targetPlatforms,
             updated_at: new Date().toISOString(),
           })
           .eq("id", campaign.id);
@@ -59,12 +106,16 @@ export function CampaignForm({ teamId, trigger, campaign }: CampaignFormProps) {
           team_id: teamId,
           name: name.trim(),
           description: description.trim() || null,
+          target_countries: targetCountries,
+          target_platforms: targetPlatforms,
         });
         if (error) throw error;
       }
       setOpen(false);
       setName("");
       setDescription("");
+      setTargetCountries([]);
+      setTargetPlatforms([]);
       router.refresh();
     } catch (error) {
       const msg = error instanceof Error ? error.message : "알 수 없는 오류";
@@ -79,7 +130,7 @@ export function CampaignForm({ teamId, trigger, campaign }: CampaignFormProps) {
       <DialogTrigger asChild>
         {trigger ?? <Button>새 캠페인</Button>}
       </DialogTrigger>
-      <DialogContent className="sm:max-w-[425px]">
+      <DialogContent className="sm:max-w-[500px] max-h-[85vh] overflow-y-auto">
         <form onSubmit={handleSubmit}>
           <DialogHeader>
             <DialogTitle>
@@ -111,6 +162,70 @@ export function CampaignForm({ teamId, trigger, campaign }: CampaignFormProps) {
                 onChange={(e) => setDescription(e.target.value)}
                 rows={3}
               />
+            </div>
+
+            {/* Target Platforms */}
+            <div className="grid gap-2">
+              <Label>타겟 플랫폼 (선택)</Label>
+              <p className="text-xs text-muted-foreground -mt-1">마스터데이터 배정 시 자동 필터링됩니다</p>
+              <div className="flex flex-wrap gap-2">
+                {TARGET_PLATFORMS.map((p) => {
+                  const isActive = targetPlatforms.includes(p.value);
+                  return (
+                    <button
+                      key={p.value}
+                      type="button"
+                      onClick={() => togglePlatform(p.value)}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs transition-colors ${
+                        isActive
+                          ? "border-primary bg-primary/10 text-primary font-medium"
+                          : "border-border text-muted-foreground hover:border-primary/30"
+                      }`}
+                    >
+                      <div className={`w-2 h-2 rounded-full ${p.dot}`} />
+                      {p.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Target Countries */}
+            <div className="grid gap-2">
+              <Label>타겟 국가 (선택)</Label>
+              <p className="text-xs text-muted-foreground -mt-1">마스터데이터 배정 시 국가 필터가 자동 적용됩니다</p>
+              <div className="flex flex-wrap gap-1.5">
+                {TARGET_COUNTRIES.map((c) => {
+                  const isActive = targetCountries.includes(c.value);
+                  return (
+                    <button
+                      key={c.value}
+                      type="button"
+                      onClick={() => toggleCountry(c.value)}
+                      className={`flex items-center gap-1 px-2 py-1 rounded-md border text-xs transition-colors ${
+                        isActive
+                          ? "border-primary bg-primary/10 text-primary font-medium"
+                          : "border-border text-muted-foreground hover:border-primary/30"
+                      }`}
+                    >
+                      {c.flag} {c.label}
+                    </button>
+                  );
+                })}
+              </div>
+              {targetCountries.length > 0 && (
+                <div className="flex items-center gap-1 mt-1">
+                  <span className="text-[10px] text-muted-foreground">선택:</span>
+                  {targetCountries.map((code) => {
+                    const info = TARGET_COUNTRIES.find((c) => c.value === code);
+                    return (
+                      <Badge key={code} variant="secondary" className="text-[10px]">
+                        {info?.flag} {info?.label}
+                      </Badge>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
           <DialogFooter>

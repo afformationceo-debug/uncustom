@@ -66,6 +66,8 @@ export type Database = {
           name: string;
           description: string | null;
           status: string;
+          target_countries: string[];
+          target_platforms: string[];
           created_by: string | null;
           created_at: string;
           updated_at: string;
@@ -76,6 +78,8 @@ export type Database = {
           name: string;
           description?: string | null;
           status?: string;
+          target_countries?: string[];
+          target_platforms?: string[];
           created_by?: string | null;
           created_at?: string;
           updated_at?: string;
@@ -86,6 +90,8 @@ export type Database = {
           name?: string;
           description?: string | null;
           status?: string;
+          target_countries?: string[];
+          target_platforms?: string[];
           created_by?: string | null;
           created_at?: string;
           updated_at?: string;
@@ -147,6 +153,7 @@ export type Database = {
           campaign_id: string | null;
           account_username: string;
           platform: string;
+          target_country: string;
           estimated_count: number | null;
           created_at: string;
         };
@@ -155,6 +162,7 @@ export type Database = {
           campaign_id?: string | null;
           account_username: string;
           platform: string;
+          target_country?: string;
           estimated_count?: number | null;
           created_at?: string;
         };
@@ -163,6 +171,7 @@ export type Database = {
           campaign_id?: string | null;
           account_username?: string;
           platform?: string;
+          target_country?: string;
           estimated_count?: number | null;
           created_at?: string;
         };

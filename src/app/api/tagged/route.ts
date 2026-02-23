@@ -7,16 +7,18 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const campaignId = searchParams.get("campaign_id");
 
-    if (!campaignId) {
-      return NextResponse.json({ error: "campaign_id is required" }, { status: 400 });
-    }
-
-    const { data, error } = await supabase
+    let query = supabase
       .from("tagged_accounts")
       .select("*")
-      .eq("campaign_id", campaignId)
       .order("created_at", { ascending: false });
 
+    if (campaignId) {
+      query = query.eq("campaign_id", campaignId);
+    } else {
+      query = query.is("campaign_id", null);
+    }
+
+    const { data, error } = await query;
     if (error) return NextResponse.json({ error: error.message }, { status: 400 });
     return NextResponse.json(data);
   } catch (err) {
@@ -28,15 +30,20 @@ export async function POST(request: Request) {
   try {
     const supabase = await createClient();
     const body = await request.json();
-    const { campaign_id, account_username, platform } = body;
+    const { campaign_id, account_username, platform, target_country } = body;
 
-    if (!campaign_id || !account_username || !platform) {
-      return NextResponse.json({ error: "campaign_id, account_username, and platform are required" }, { status: 400 });
+    if (!account_username || !platform) {
+      return NextResponse.json({ error: "account_username and platform are required" }, { status: 400 });
     }
 
     const { data, error } = await supabase
       .from("tagged_accounts")
-      .insert({ campaign_id, account_username, platform })
+      .insert({
+        campaign_id: campaign_id || null,
+        account_username,
+        platform,
+        target_country: target_country || "ALL",
+      })
       .select()
       .single();
 
