@@ -44,48 +44,6 @@ export async function GET(request: Request) {
     }
 
     if (!job.apify_run_id) {
-      // For email_social jobs mid-chain: skip failed user and start next
-      if (job.type === "email_social" && job.status === "running") {
-        const inputConfig = job.input_config as Record<string, unknown> | null;
-        const allItems = (inputConfig?.items ?? []) as { platform: string; user_id: string }[];
-        const currentIndex = (inputConfig?.current_index ?? 0) as number;
-        const nextIndex = currentIndex + 1;
-
-        if (nextIndex < allItems.length) {
-          const nextItem = allItems[nextIndex];
-          try {
-            const run = await startActor(APIFY_ACTORS.SOCIAL_EMAIL_SCRAPER, {
-              platform: nextItem.platform,
-              username: nextItem.user_id,
-            });
-            await supabase
-              .from("extraction_jobs")
-              .update({
-                apify_run_id: run.id,
-                input_config: { ...inputConfig, current_index: nextIndex } as unknown as Json,
-              })
-              .eq("id", jobId);
-            return NextResponse.json({ status: "running", total_extracted: job.total_extracted });
-          } catch {
-            // Skip again
-            await supabase
-              .from("extraction_jobs")
-              .update({
-                apify_run_id: null,
-                input_config: { ...inputConfig, current_index: nextIndex } as unknown as Json,
-              })
-              .eq("id", jobId);
-            return NextResponse.json({ status: "running", total_extracted: job.total_extracted });
-          }
-        } else {
-          // All items processed
-          await supabase
-            .from("extraction_jobs")
-            .update({ status: "completed", completed_at: new Date().toISOString() })
-            .eq("id", jobId);
-          return NextResponse.json({ status: "completed", total_extracted: job.total_extracted, new_extracted: job.new_extracted });
-        }
-      }
       return NextResponse.json({ status: job.status, total_extracted: 0 });
     }
 
@@ -110,53 +68,11 @@ export async function GET(request: Request) {
         return handleEmailScrapeResults(supabase, job, items, jobId);
       }
 
-      // Route to social email scraper results (cross-platform email lookup)
-      if (job.type === "email_social") {
-        return handleSocialEmailResults(supabase, job, items, jobId);
-      }
+      // (email_social type removed — now uses email_scrape with EMAIL_EXTRACTOR)
 
       // Regular extraction handling (keyword/tagged)
       return handleExtractionResults(supabase, job, items, jobId);
     } else if (run.status === "FAILED" || run.status === "ABORTED") {
-      // For email_social chain: skip failed user and continue to next
-      if (job.type === "email_social") {
-        const inputConfig = job.input_config as Record<string, unknown> | null;
-        const allItems = (inputConfig?.items ?? []) as { platform: string; user_id: string }[];
-        const currentIndex = (inputConfig?.current_index ?? 0) as number;
-        const nextIndex = currentIndex + 1;
-
-        if (nextIndex < allItems.length) {
-          const nextItem = allItems[nextIndex];
-          console.log(`[extract/status] Social email: user ${currentIndex} failed, skipping to ${nextIndex} (${nextItem.user_id})`);
-          try {
-            const nextRun = await startActor(APIFY_ACTORS.SOCIAL_EMAIL_SCRAPER, {
-              platform: nextItem.platform,
-              username: nextItem.user_id,
-            });
-            await supabase
-              .from("extraction_jobs")
-              .update({
-                apify_run_id: nextRun.id,
-                total_extracted: (job.total_extracted ?? 0) + 1,
-                input_config: { ...inputConfig, current_index: nextIndex } as unknown as Json,
-              })
-              .eq("id", jobId);
-            return NextResponse.json({ status: "running", total_extracted: (job.total_extracted ?? 0) + 1 });
-          } catch {
-            // Can't start next either, set null and let next poll retry
-            await supabase
-              .from("extraction_jobs")
-              .update({
-                apify_run_id: null,
-                total_extracted: (job.total_extracted ?? 0) + 1,
-                input_config: { ...inputConfig, current_index: nextIndex } as unknown as Json,
-              })
-              .eq("id", jobId);
-            return NextResponse.json({ status: "running", total_extracted: (job.total_extracted ?? 0) + 1 });
-          }
-        }
-      }
-
       await supabase
         .from("extraction_jobs")
         .update({ status: "failed", completed_at: new Date().toISOString() })
@@ -574,12 +490,12 @@ async function handleExtractionResults(
     }
   }
 
-  // Auto-trigger cross-platform email extraction for ALL platforms (uses social-media-email-scraper)
-  let socialEmailJobId: string | null = null;
+  // Auto-trigger web email extraction (scrape external_url / profile links for emails)
+  let emailJobId: string | null = null;
   try {
-    socialEmailJobId = await autoTriggerSocialEmailExtraction(supabase, job.platform, job.campaign_id);
+    emailJobId = await autoTriggerWebEmailExtraction(supabase, job.platform, job.campaign_id);
   } catch (err) {
-    console.error("[extract/status] Auto social email extraction error:", err);
+    console.error("[extract/status] Auto web email extraction error:", err);
   }
 
   return NextResponse.json({
@@ -587,7 +503,7 @@ async function handleExtractionResults(
     total_extracted: totalUsers,
     new_extracted: newCount,
     enrich_job_id: enrichJobId,
-    social_email_job_id: socialEmailJobId,
+    email_job_id: emailJobId,
   });
 }
 
@@ -1271,21 +1187,21 @@ async function handleEmailScrapeResults(
 }
 
 /**
- * Auto-trigger cross-platform email extraction using social-media-email-scraper
- * Works for ALL platforms: Instagram, TikTok, YouTube, Twitter
- * Finds emails by platform + user_id lookup (no website scraping needed)
+ * Auto-trigger web-based email extraction using EMAIL_EXTRACTOR (linktree/bio link scraper)
+ * Collects external_url and profile_url from influencers without email,
+ * registers them as influencer_links, and batch-scrapes all URLs in a single Apify run.
  */
-async function autoTriggerSocialEmailExtraction(
+async function autoTriggerWebEmailExtraction(
   supabase: Awaited<ReturnType<typeof createClient>>,
   platform: string,
   campaignId: string | null,
 ): Promise<string | null> {
   try {
-    // Check if there's already a running social email job
+    // Check if there's already a running email scrape job for this platform
     const existingQuery = supabase
       .from("extraction_jobs")
       .select("id")
-      .eq("type", "email_social")
+      .eq("type", "email_scrape")
       .eq("platform", platform)
       .in("status", ["running", "pending"])
       .limit(1);
@@ -1298,17 +1214,16 @@ async function autoTriggerSocialEmailExtraction(
 
     const { data: existingJob } = await existingQuery;
     if (existingJob && existingJob.length > 0) {
-      console.log("[extract/status] Social email extraction already running for", platform);
+      console.log("[extract/status] Web email extraction already running for", platform);
       return null;
     }
 
-    // Find influencers without email for this platform
+    // Find influencers without email that have external_url or profile_url
     let infQuery = supabase
       .from("influencers")
-      .select("id, platform_id, username")
+      .select("id, external_url, profile_url")
       .eq("platform", platform)
       .is("email", null)
-      .not("platform_id", "is", null)
       .limit(200);
 
     // If campaign-scoped, filter by campaign_influencers
@@ -1328,50 +1243,78 @@ async function autoTriggerSocialEmailExtraction(
       return null;
     }
 
-    // Map platform names for the social email scraper input
-    const platformMap: Record<string, string> = {
-      instagram: "instagram",
-      tiktok: "tiktok",
-      youtube: "youtube",
-      twitter: "twitter",
-    };
-    const scraperPlatform = platformMap[platform] ?? platform;
+    // Collect URLs and register as influencer_links (for result matching)
+    const urlsToScrape: string[] = [];
+    const linkMap: Record<string, { link_id: string; influencer_id: string }> = {};
+    const typedInfs = noEmailInfs as { id: string; external_url: string | null; profile_url: string | null }[];
 
-    // Build batch input: array of {platform, user_id} objects
-    const lookupItems = noEmailInfs.map((inf) => ({
-      platform: scraperPlatform,
-      user_id: (inf as { platform_id: string | null; username: string | null }).username
-        || (inf as { platform_id: string | null }).platform_id
-        || "",
-    })).filter((item) => item.user_id !== "");
+    for (const inf of typedInfs) {
+      const urls: string[] = [];
+      if (inf.external_url && inf.external_url.startsWith("http")) urls.push(inf.external_url);
+      if (inf.profile_url && inf.profile_url.startsWith("http")) urls.push(inf.profile_url);
 
-    if (lookupItems.length === 0) return null;
+      for (const url of urls) {
+        // Upsert into influencer_links (avoid dupes)
+        const { data: linkData } = await supabase
+          .from("influencer_links")
+          .upsert(
+            { influencer_id: inf.id, url, scraped: false },
+            { onConflict: "influencer_id,url" }
+          )
+          .select("id, scraped")
+          .single();
 
-    // Build influencer map for result matching
-    const infMap: Record<string, string> = {};
-    for (const inf of noEmailInfs) {
-      const typedInf = inf as { id: string; platform_id: string | null; username: string | null };
-      if (typedInf.username) infMap[typedInf.username.toLowerCase()] = typedInf.id;
-      if (typedInf.platform_id) infMap[typedInf.platform_id] = typedInf.id;
+        if (linkData && !linkData.scraped) {
+          urlsToScrape.push(url);
+          linkMap[url] = { link_id: linkData.id, influencer_id: inf.id };
+        }
+      }
     }
 
-    // The social-media-email-scraper only accepts single user input (platform, user_id/username).
-    // To batch, we run ONE actor per user. Limit to max 50 to avoid excessive Apify costs.
-    const batchItems = lookupItems.slice(0, 50);
-    console.log(`[extract/status] Auto-triggering social email extraction: ${batchItems.length} ${platform} influencers (of ${lookupItems.length} total)`);
+    // Also check existing unscraped links for these influencers
+    const infIds = typedInfs.map((inf) => inf.id);
+    const { data: existingLinks } = await supabase
+      .from("influencer_links")
+      .select("id, influencer_id, url")
+      .in("influencer_id", infIds)
+      .eq("scraped", false);
 
-    // Create job record
+    if (existingLinks) {
+      for (const link of existingLinks) {
+        if (!linkMap[link.url]) {
+          urlsToScrape.push(link.url);
+          linkMap[link.url] = { link_id: link.id, influencer_id: link.influencer_id };
+        }
+      }
+    }
+
+    if (urlsToScrape.length === 0) {
+      console.log(`[extract/status] No URLs to scrape for ${platform} email extraction`);
+      return null;
+    }
+
+    // Limit to 200 URLs per batch
+    const batchUrls = urlsToScrape.slice(0, 200);
+    const batchLinkMap: Record<string, { link_id: string; influencer_id: string }> = {};
+    for (const url of batchUrls) {
+      if (linkMap[url]) batchLinkMap[url] = linkMap[url];
+    }
+
+    console.log(`[extract/status] Auto-triggering web email extraction: ${batchUrls.length} URLs for ${platform}`);
+
+    // Create job record (type=email_scrape, reuses handleEmailScrapeResults)
     const { data: jobData, error: jobError } = await supabase
       .from("extraction_jobs")
       .insert({
         campaign_id: campaignId,
-        type: "email_social",
+        type: "email_scrape",
         platform,
         status: "running",
         input_config: {
-          items: batchItems,
-          influencer_map: infMap,
-          total: batchItems.length,
+          urls: batchUrls,
+          link_map: batchLinkMap,
+          total_links: batchUrls.length,
+          total_influencers: infIds.length,
         } as unknown as Json,
         started_at: new Date().toISOString(),
       })
@@ -1379,36 +1322,23 @@ async function autoTriggerSocialEmailExtraction(
       .single();
 
     if (jobError || !jobData) {
-      console.error("[extract/status] Failed to create social email job:", jobError?.message);
+      console.error("[extract/status] Failed to create web email job:", jobError?.message);
       return null;
     }
 
-    // Start the first user lookup - the actor takes single user input
-    // We start with the first item; handleSocialEmailResults will chain the rest
-    const firstItem = batchItems[0];
+    // Start EMAIL_EXTRACTOR with all URLs in a single batch run
     try {
-      const run = await startActor(APIFY_ACTORS.SOCIAL_EMAIL_SCRAPER, {
-        platform: firstItem.platform,
-        username: firstItem.user_id,
-      });
+      const run = await startActor(APIFY_ACTORS.EMAIL_EXTRACTOR, { urls: batchUrls });
 
       await supabase
         .from("extraction_jobs")
-        .update({
-          apify_run_id: run.id,
-          input_config: {
-            items: batchItems,
-            influencer_map: infMap,
-            total: batchItems.length,
-            current_index: 0,
-          } as unknown as Json,
-        })
+        .update({ apify_run_id: run.id })
         .eq("id", jobData.id);
 
-      console.log(`[extract/status] Social email job started: ${jobData.id} (Apify run: ${run.id}, user: ${firstItem.user_id})`);
+      console.log(`[extract/status] Web email job started: ${jobData.id} (Apify run: ${run.id}, ${batchUrls.length} URLs)`);
       return jobData.id;
     } catch (startErr) {
-      console.error("[extract/status] Failed to start social email actor:", startErr);
+      console.error("[extract/status] Failed to start EMAIL_EXTRACTOR:", startErr);
       await supabase
         .from("extraction_jobs")
         .update({ status: "failed", completed_at: new Date().toISOString() })
@@ -1416,140 +1346,7 @@ async function autoTriggerSocialEmailExtraction(
       return null;
     }
   } catch (err) {
-    console.error("[extract/status] Auto social email extraction error:", err);
+    console.error("[extract/status] Auto web email extraction error:", err);
     return null;
   }
-}
-
-/**
- * Handle results from social-media-email-scraper (cross-platform email lookup)
- * Matches results back to influencers and updates their email
- */
-async function handleSocialEmailResults(
-  supabase: Awaited<ReturnType<typeof createClient>>,
-  job: ExtractionJob,
-  items: Record<string, unknown>[],
-  jobId: string,
-) {
-  const inputConfig = job.input_config as Record<string, unknown> | null;
-  const infMap = (inputConfig?.influencer_map ?? {}) as Record<string, string>;
-  const allItems = (inputConfig?.items ?? []) as { platform: string; user_id: string }[];
-  const currentIndex = (inputConfig?.current_index ?? 0) as number;
-  const prevExtracted = job.total_extracted ?? 0;
-  const prevEmails = job.new_extracted ?? 0;
-
-  let emailsFound = 0;
-
-  // Process result from current single-user lookup
-  for (const item of items) {
-    const result = item as Record<string, unknown>;
-    const email = (result.email ?? result.emails) as string | string[] | undefined;
-    const userId = (result.user_id ?? result.userId ?? result.username ?? result.id) as string | undefined;
-
-    let finalEmail: string | null = null;
-    if (Array.isArray(email)) {
-      finalEmail = email.find((e) => typeof e === "string" && e.includes("@")) ?? null;
-    } else if (typeof email === "string" && email.includes("@")) {
-      finalEmail = email;
-    }
-
-    if (!finalEmail) continue;
-
-    // Try matching via infMap
-    const matchKey = userId?.toLowerCase() ?? "";
-    const influencerId = infMap[matchKey] ?? (userId ? infMap[userId] : null) ?? null;
-    if (!influencerId) continue;
-
-    const { data: infCheck } = await supabase
-      .from("influencers")
-      .select("email")
-      .eq("id", influencerId)
-      .single();
-
-    if (infCheck && !infCheck.email) {
-      await supabase
-        .from("influencers")
-        .update({
-          email: finalEmail,
-          email_source: `social-scraper:${job.platform}`,
-        })
-        .eq("id", influencerId);
-      emailsFound++;
-    }
-  }
-
-  const totalProcessed = prevExtracted + 1;
-  const totalEmails = prevEmails + emailsFound;
-  const nextIndex = currentIndex + 1;
-
-  // Check if there are more users to process
-  if (nextIndex < allItems.length) {
-    const nextItem = allItems[nextIndex];
-    try {
-      const run = await startActor(APIFY_ACTORS.SOCIAL_EMAIL_SCRAPER, {
-        platform: nextItem.platform,
-        username: nextItem.user_id,
-      });
-
-      // Update job with next run ID and progress
-      await supabase
-        .from("extraction_jobs")
-        .update({
-          apify_run_id: run.id,
-          total_extracted: totalProcessed,
-          new_extracted: totalEmails,
-          input_config: {
-            ...inputConfig,
-            current_index: nextIndex,
-          } as unknown as Json,
-        })
-        .eq("id", jobId);
-
-      console.log(`[extract/status] Social email: ${totalProcessed}/${allItems.length} done, ${totalEmails} emails. Next: ${nextItem.user_id}`);
-
-      return NextResponse.json({
-        status: "running",
-        total_extracted: totalProcessed,
-        new_extracted: totalEmails,
-        type: "email_social",
-        progress: `${totalProcessed}/${allItems.length}`,
-      });
-    } catch (err) {
-      console.error(`[extract/status] Social email actor start failed for ${nextItem.user_id}:`, err);
-      // Skip this user, try to continue with next
-      // Update index and try again on next poll
-      await supabase
-        .from("extraction_jobs")
-        .update({
-          apify_run_id: null,
-          total_extracted: totalProcessed,
-          new_extracted: totalEmails,
-          input_config: {
-            ...inputConfig,
-            current_index: nextIndex,
-          } as unknown as Json,
-        })
-        .eq("id", jobId);
-    }
-  }
-
-  // All users processed or final item
-  await supabase
-    .from("extraction_jobs")
-    .update({
-      status: "completed",
-      total_extracted: totalProcessed,
-      new_extracted: totalEmails,
-      completed_at: new Date().toISOString(),
-    })
-    .eq("id", jobId);
-
-  console.log(`[extract/status] Social email completed: ${totalProcessed}/${allItems.length} processed, ${totalEmails} emails found`);
-
-  return NextResponse.json({
-    status: "completed",
-    total_extracted: totalProcessed,
-    new_extracted: totalEmails,
-    type: "email_social",
-  });
 }
