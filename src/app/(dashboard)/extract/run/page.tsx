@@ -211,11 +211,16 @@ export default function MasterExtractPage() {
                 toast.info("Instagram 프로필 보강이 자동 시작되었습니다 (팔로워, 프로필사진 등)");
                 startPolling(result.enrich_job_id);
               }
-              // If social email extraction was auto-triggered, start polling
-              if (result.social_email_job_id) {
-                toast.info("소셜미디어 이메일 추출이 자동 시작되었습니다");
-                startPolling(result.social_email_job_id);
+              // If web email extraction was auto-triggered, start polling
+              if (result.email_job_id) {
+                toast.info("이메일 추출이 자동 시작되었습니다 (바이오 링크 스크래핑)");
+                startPolling(result.email_job_id);
               }
+            }
+            // Handle auto-triggered email scrape from enrichment completion
+            if (currentJob?.type === "enrich" && result.email_scrape_job_id) {
+              toast.info("이메일 추출이 자동 시작되었습니다 (바이오 링크 스크래핑)");
+              startPolling(result.email_scrape_job_id);
             }
           } else {
             toast.error(`추출 실패: ${result.error ?? "알 수 없는 오류"}`);
@@ -534,10 +539,10 @@ export default function MasterExtractPage() {
                     </div>
                     <div className="ml-auto flex-shrink-0 text-right">
                       <span className="text-xs font-semibold text-amber-600 dark:text-amber-400">
-                        총 ~${pipeline.total.toFixed(2)}
+                        최대 ~${pipeline.total.toFixed(2)}
                       </span>
                       <span className="block text-[9px] text-muted-foreground">
-                        소스 {sourceCount}개 × {defaultLimit}건 기준
+                        소스 {sourceCount}개 × 최대 {defaultLimit}건 기준
                       </span>
                     </div>
                   </div>
@@ -800,7 +805,12 @@ export default function MasterExtractPage() {
                         </div>
                         <div className="flex items-start gap-4 text-[10px] text-muted-foreground pl-5">
                           <div className="space-y-0.5">
-                            <span className="block">├ 추출 ({taggedCostAccounts.length}개 계정): <span className="text-amber-600 dark:text-amber-400 font-medium">~${pipeline.extraction.toFixed(2)}</span></span>
+                            {(() => {
+                              const totalLimit = taggedCostAccounts.reduce((s, a) => s + a.limit, 0);
+                              return (
+                                <span className="block">├ 추출 ({taggedCostAccounts.length}개 계정, 최대 {totalLimit}건): <span className="text-amber-600 dark:text-amber-400 font-medium">~${pipeline.extraction.toFixed(2)}</span></span>
+                              );
+                            })()}
                             {hasIG && (
                               <span className="block">├ IG 프로필 보강: <span className="text-amber-600 dark:text-amber-400 font-medium">~${pipeline.enrichment.toFixed(2)}</span></span>
                             )}
@@ -808,8 +818,9 @@ export default function MasterExtractPage() {
                           </div>
                           <div className="ml-auto flex-shrink-0 text-right">
                             <span className="text-xs font-semibold text-amber-600 dark:text-amber-400">
-                              총 ~${pipeline.total.toFixed(2)}
+                              최대 ~${pipeline.total.toFixed(2)}
                             </span>
+                            <span className="block text-[9px] text-muted-foreground">실제 결과에 따라 감소</span>
                           </div>
                         </div>
                       </div>
