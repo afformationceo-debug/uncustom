@@ -124,33 +124,38 @@ while (!done) {
     }
 
     for (const item of items) {
-      // vdrmota/contact-info-scraper returns: url (page), referrerUrl (parent), emails[]
-      const pageUrl = item.url;
-      const referrerUrl = item.referrerUrl;
+      // vdrmota/contact-info-scraper returns one item per start URL:
+      //   originalStartUrl, scrapedUrls[], emails[], phones[]
+      const originalStartUrl = item.originalStartUrl;
       const emails = item.emails || item.email || [];
       const emailList = Array.isArray(emails)
-        ? emails.filter(e => typeof e === 'string' && e.includes('@'))
+        ? emails.filter(e => typeof e === 'string' && e.includes('@') &&
+            !e.includes('gdprlocal.com') && !e.includes('privacy@') && !e.includes('dpo.support@'))
         : (typeof emails === 'string' && emails.includes('@')) ? [emails] : [];
 
-      if (!pageUrl) continue;
+      if (!originalStartUrl) continue;
 
-      // Match by direct URL or referrerUrl
-      let matched = linkMap[pageUrl];
-      if (!matched && pageUrl) {
+      // Match by originalStartUrl
+      let matched = linkMap[originalStartUrl];
+      if (!matched) {
         try {
-          const u = new URL(pageUrl);
+          const u = new URL(originalStartUrl);
           const norm = `https://${u.hostname.replace(/^www\./, '')}${u.pathname.replace(/\/+$/, '')}`.toLowerCase();
           matched = normalizedLinkMap.get(norm);
         } catch {}
       }
-      if (!matched && referrerUrl) {
-        matched = linkMap[referrerUrl];
-        if (!matched) {
-          try {
-            const u = new URL(referrerUrl);
-            const norm = `https://${u.hostname.replace(/^www\./, '')}${u.pathname.replace(/\/+$/, '')}`.toLowerCase();
-            matched = normalizedLinkMap.get(norm);
-          } catch {}
+      // Fallback: try scrapedUrls
+      if (!matched && Array.isArray(item.scrapedUrls)) {
+        for (const scraped of item.scrapedUrls) {
+          matched = linkMap[scraped];
+          if (!matched) {
+            try {
+              const u = new URL(scraped);
+              const norm = `https://${u.hostname.replace(/^www\./, '')}${u.pathname.replace(/\/+$/, '')}`.toLowerCase();
+              matched = normalizedLinkMap.get(norm);
+            } catch {}
+          }
+          if (matched) break;
         }
       }
 
@@ -173,7 +178,7 @@ while (!done) {
           .single();
 
         if (inf && !inf.email) {
-          const sourceUrl = referrerUrl || pageUrl;
+          const sourceUrl = originalStartUrl;
           let emailSource = 'web-scraper';
           try {
             emailSource = `${new URL(sourceUrl).hostname.replace('www.', '')}:${sourceUrl}`;
@@ -192,20 +197,20 @@ while (!done) {
     // Mark remaining unprocessed links as scraped (no email found)
     const processedLinkIds = new Set();
     for (const item of items) {
-      const pUrl = item.url;
-      const rUrl = item.referrerUrl;
-      if (pUrl && linkMap[pUrl]) processedLinkIds.add(linkMap[pUrl].link_id);
-      if (rUrl && linkMap[rUrl]) processedLinkIds.add(linkMap[rUrl].link_id);
-      // Also try normalized matching
-      for (const [url, match] of [
-        [pUrl, null], [rUrl, null]
-      ].filter(([u]) => u)) {
+      const startUrl = item.originalStartUrl;
+      if (startUrl && linkMap[startUrl]) processedLinkIds.add(linkMap[startUrl].link_id);
+      if (startUrl) {
         try {
-          const u = new URL(url);
+          const u = new URL(startUrl);
           const norm = `https://${u.hostname.replace(/^www\./, '')}${u.pathname.replace(/\/+$/, '')}`.toLowerCase();
           const m = normalizedLinkMap.get(norm);
           if (m) processedLinkIds.add(m.link_id);
         } catch {}
+      }
+      if (Array.isArray(item.scrapedUrls)) {
+        for (const scraped of item.scrapedUrls) {
+          if (linkMap[scraped]) processedLinkIds.add(linkMap[scraped].link_id);
+        }
       }
     }
     const unprocessedLinks = links.filter(l => !processedLinkIds.has(l.id));

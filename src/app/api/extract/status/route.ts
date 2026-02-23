@@ -1061,28 +1061,35 @@ async function handleEmailScrapeResults(
 
   for (const item of items) {
     const result = item as Record<string, unknown>;
-    // vdrmota/contact-info-scraper returns: url (current page), referrerUrl (parent page), emails[]
-    const pageUrl = result.url as string | undefined;
-    const referrerUrl = result.referrerUrl as string | undefined;
+    // vdrmota/contact-info-scraper returns one item per start URL:
+    //   originalStartUrl: the URL we provided, emails[], phones[], scrapedUrls[]
+    const originalStartUrl = result.originalStartUrl as string | undefined;
     const emails = (result.emails ?? result.email) as string[] | string | undefined;
 
-    // Normalize emails to array
+    // Normalize emails to array, filter out generic/privacy emails
     let emailList: string[] = [];
     if (Array.isArray(emails)) {
-      emailList = emails.filter((e) => typeof e === "string" && e.includes("@"));
+      emailList = emails.filter((e) =>
+        typeof e === "string" && e.includes("@") &&
+        !e.includes("gdprlocal.com") && !e.includes("privacy@") &&
+        !e.includes("dpo.support@")
+      );
     } else if (typeof emails === "string" && emails.includes("@")) {
       emailList = [emails];
     }
 
-    // Try to match this result back to a link via URL
-    // Priority: direct URL match → referrerUrl match (for depth>0 pages)
+    // Try to match this result back to a link via originalStartUrl
     let matchedLink: { link_id: string; influencer_id: string } | null = null;
 
-    if (pageUrl) {
-      matchedLink = linkMap[pageUrl] ?? normalizedLinkMap.get(normalizeUrl(pageUrl)) ?? null;
+    if (originalStartUrl) {
+      matchedLink = linkMap[originalStartUrl] ?? normalizedLinkMap.get(normalizeUrl(originalStartUrl)) ?? null;
     }
-    if (!matchedLink && referrerUrl) {
-      matchedLink = linkMap[referrerUrl] ?? normalizedLinkMap.get(normalizeUrl(referrerUrl)) ?? null;
+    // Fallback: try scrapedUrls array (actual pages visited)
+    if (!matchedLink && Array.isArray(result.scrapedUrls)) {
+      for (const scraped of result.scrapedUrls as string[]) {
+        matchedLink = linkMap[scraped] ?? normalizedLinkMap.get(normalizeUrl(scraped)) ?? null;
+        if (matchedLink) break;
+      }
     }
 
     if (!matchedLink) {
@@ -1115,8 +1122,8 @@ async function handleEmailScrapeResults(
         const foundEmail = emailList[0];
         // Extract domain from the source URL for email_source
         // Format: "linktree:https://linktr.ee/username" to include source info
-        // Use referrerUrl (original start URL) or pageUrl for source tracking
-        const sourceUrl = referrerUrl ?? pageUrl;
+        // Use originalStartUrl for source tracking
+        const sourceUrl = originalStartUrl;
         let emailSource = "web-scraper";
         if (sourceUrl) {
           try {
@@ -1147,16 +1154,17 @@ async function handleEmailScrapeResults(
   const processedLinkIds = new Set<string>();
   for (const item of items) {
     const result = item as Record<string, unknown>;
-    const itemUrl = result.url as string | undefined;
-    const itemReferrer = result.referrerUrl as string | undefined;
-    // Match by direct URL or referrer URL
-    if (itemUrl) {
-      const match = linkMap[itemUrl] ?? normalizedLinkMap.get(normalizeUrl(itemUrl));
+    const startUrl = result.originalStartUrl as string | undefined;
+    if (startUrl) {
+      const match = linkMap[startUrl] ?? normalizedLinkMap.get(normalizeUrl(startUrl));
       if (match) processedLinkIds.add(match.link_id);
     }
-    if (itemReferrer) {
-      const match = linkMap[itemReferrer] ?? normalizedLinkMap.get(normalizeUrl(itemReferrer));
-      if (match) processedLinkIds.add(match.link_id);
+    // Also check scrapedUrls for matching
+    if (Array.isArray(result.scrapedUrls)) {
+      for (const scraped of result.scrapedUrls as string[]) {
+        const match = linkMap[scraped] ?? normalizedLinkMap.get(normalizeUrl(scraped));
+        if (match) processedLinkIds.add(match.link_id);
+      }
     }
   }
 
