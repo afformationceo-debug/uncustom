@@ -806,7 +806,8 @@ export default function MasterExtractPage() {
                 <TableHead>소스</TableHead>
                 <TableHead>플랫폼</TableHead>
                 <TableHead>상태</TableHead>
-                <TableHead className="text-right">전체</TableHead>
+                <TableHead className="text-right">요청</TableHead>
+                <TableHead className="text-right">추출</TableHead>
                 <TableHead className="text-right">신규</TableHead>
                 <TableHead>시작</TableHead>
               </TableRow>
@@ -814,13 +815,13 @@ export default function MasterExtractPage() {
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center py-12 text-muted-foreground">
+                  <TableCell colSpan={8} className="text-center py-12 text-muted-foreground">
                     <Loader2 className="w-5 h-5 animate-spin mx-auto mb-2" />로딩 중...
                   </TableCell>
                 </TableRow>
               ) : filteredJobs.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center py-12">
+                  <TableCell colSpan={8} className="text-center py-12">
                     <Zap className="w-8 h-8 opacity-10 mx-auto mb-2" />
                     <p className="text-sm text-muted-foreground">
                       {jobFilter === "all" ? "추출 작업이 없습니다" : `${jobFilter === "running" ? "실행 중인" : jobFilter === "completed" ? "완료된" : "실패한"} 작업이 없습니다`}
@@ -856,7 +857,44 @@ export default function MasterExtractPage() {
                       </span>
                     </div>
                   </TableCell>
-                  <TableCell className="text-right font-medium">{job.total_extracted ?? 0}</TableCell>
+                  <TableCell className="text-right text-xs text-muted-foreground">
+                    {(() => {
+                      const cfg = job.input_config as Record<string, unknown> | null;
+                      const limit = cfg?.resultsLimit ?? cfg?.resultsPerPage ?? cfg?.maxResults ?? cfg?.maxItems ?? null;
+                      return limit != null ? Number(limit).toLocaleString() : "-";
+                    })()}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    {(() => {
+                      const extracted = job.total_extracted ?? 0;
+                      const cfg = job.input_config as Record<string, unknown> | null;
+                      const limit = Number(cfg?.resultsLimit ?? cfg?.resultsPerPage ?? cfg?.maxResults ?? cfg?.maxItems ?? 0);
+                      const isShort = job.status === "completed" && limit > 0 && extracted < limit;
+                      const shortReason = job.type === "keyword" || job.type === "tagged"
+                        ? "동일 사용자 중복 제거됨 (1인 = 여러 게시물)"
+                        : job.type === "enrich"
+                          ? "보강 대상 인플루언서 수"
+                          : "추출 결과";
+
+                      if (isShort) {
+                        return (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <span className="font-medium text-amber-600 cursor-help">
+                                {extracted.toLocaleString()}
+                                <span className="text-[9px] ml-0.5">⚠</span>
+                              </span>
+                            </TooltipTrigger>
+                            <TooltipContent side="left" className="max-w-[240px]">
+                              <p className="text-xs font-medium">요청: {limit.toLocaleString()} → 결과: {extracted.toLocaleString()}</p>
+                              <p className="text-[10px] text-muted-foreground mt-0.5">{shortReason}</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        );
+                      }
+                      return <span className="font-medium">{extracted.toLocaleString()}</span>;
+                    })()}
+                  </TableCell>
                   <TableCell className="text-right">
                     {(job.new_extracted ?? 0) > 0 ? (
                       <span className="text-green-600 font-medium">+{job.new_extracted}</span>
