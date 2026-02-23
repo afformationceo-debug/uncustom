@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { runActor, getRunStatus, getDatasetItems } from "@/lib/apify/client";
-import { APIFY_ACTORS, getDefaultInput } from "@/lib/apify/actors";
+import { startActor } from "@/lib/apify/client";
+import { APIFY_ACTORS } from "@/lib/apify/actors";
 import { extractEmailFromBio } from "@/lib/utils/email-extractor";
-import type { Tables } from "@/types/database";
+import type { Json, Tables } from "@/types/database";
 
 type Influencer = Tables<"influencers">;
 type InfluencerLink = Tables<"influencer_links">;
@@ -72,91 +72,77 @@ export async function POST(request: Request) {
       });
     }
 
-    // Use Apify EMAIL_EXTRACTOR to scrape links
+    // Build URL list and link map for the status handler
     const urls = links.map((l) => l.url);
-    const input = getDefaultInput(APIFY_ACTORS.EMAIL_EXTRACTOR, {});
-    (input as Record<string, unknown>).urls = urls;
+    const linkMap: Record<string, { link_id: string; influencer_id: string }> = {};
+    for (const link of links) {
+      linkMap[link.url] = {
+        link_id: link.id,
+        influencer_id: link.influencer_id,
+      };
+    }
 
+    // Create extraction job record for tracking
+    const { data: jobData, error: jobError } = await supabase
+      .from("extraction_jobs")
+      .insert({
+        campaign_id: null,
+        type: "email_scrape",
+        platform: influencer.platform,
+        status: "running",
+        input_config: {
+          urls,
+          link_map: linkMap,
+          total_links: links.length,
+          total_influencers: 1,
+          single_influencer_id: influencer_id,
+        } as unknown as Json,
+        started_at: new Date().toISOString(),
+      })
+      .select("id")
+      .single();
+
+    if (jobError || !jobData) {
+      console.error("[extract/email] Failed to create job:", jobError?.message);
+      return NextResponse.json({ error: "Failed to create extraction job" }, { status: 500 });
+    }
+
+    // Start the Apify EMAIL_EXTRACTOR actor (non-blocking)
     try {
-      const run = await runActor(APIFY_ACTORS.EMAIL_EXTRACTOR, input as Record<string, unknown>);
+      const run = await startActor(APIFY_ACTORS.EMAIL_EXTRACTOR, { startUrls: urls.map(url => ({ url })) });
 
-      // Poll for completion (max 60 seconds)
-      let attempts = 0;
-      const maxAttempts = 12;
-      let runStatus = run.status;
+      await supabase
+        .from("extraction_jobs")
+        .update({ apify_run_id: run.id })
+        .eq("id", jobData.id);
 
-      while (runStatus !== "SUCCEEDED" && runStatus !== "FAILED" && runStatus !== "ABORTED" && attempts < maxAttempts) {
-        await new Promise((resolve) => setTimeout(resolve, 5000));
-        const statusCheck = await getRunStatus(run.id);
-        if (statusCheck) {
-          runStatus = statusCheck.status;
-        }
-        attempts++;
-      }
+      console.log(
+        `[extract/email] Job started: ${jobData.id} (Apify run: ${run.id}), ` +
+        `${links.length} links for influencer ${influencer_id}`
+      );
 
-      if (runStatus === "SUCCEEDED") {
-        const items = await getDatasetItems(run.defaultDatasetId);
-        let foundEmail: string | null = null;
-
-        for (const item of items) {
-          const result = item as Record<string, unknown>;
-          const emails = result.emails as string[] | undefined;
-
-          if (emails && emails.length > 0) {
-            foundEmail = emails[0];
-            break;
-          }
-        }
-
-        // Mark all links as scraped
-        for (const link of links) {
-          const linkItem = items.find((item) => {
-            const r = item as Record<string, unknown>;
-            return r.url === link.url;
-          });
-          const emailsFound = linkItem
-            ? ((linkItem as Record<string, unknown>).emails as string[]) ?? []
-            : [];
-
-          await supabase
-            .from("influencer_links")
-            .update({
-              scraped: true,
-              emails_found: emailsFound.length > 0 ? emailsFound : null,
-              scraped_at: new Date().toISOString(),
-            })
-            .eq("id", link.id);
-        }
-
-        // Update influencer if email found
-        if (foundEmail) {
-          await supabase
-            .from("influencers")
-            .update({ email: foundEmail, email_source: "linktree" })
-            .eq("id", influencer_id);
-
-          return NextResponse.json({
-            email: foundEmail,
-            email_source: "linktree",
-            already_exists: false,
-          });
-        }
-
-        return NextResponse.json({
-          email: null,
-          email_source: null,
-          message: "No email found in linked pages",
-        });
-      } else {
-        return NextResponse.json({
-          error: "Email extraction failed or timed out",
-          status: runStatus,
-        }, { status: 500 });
-      }
+      return NextResponse.json({
+        job_id: jobData.id,
+        apify_run_id: run.id,
+        unscraped_links: links.length,
+        status: "running",
+        message: "Email extraction started. Poll /api/extract/status?job_id=... for results.",
+      });
     } catch (apifyError) {
-      return NextResponse.json({ error: "Failed to run email extractor" }, { status: 500 });
+      await supabase
+        .from("extraction_jobs")
+        .update({
+          status: "failed",
+          completed_at: new Date().toISOString(),
+        })
+        .eq("id", jobData.id);
+
+      console.error("[extract/email] Apify start error:", apifyError);
+      return NextResponse.json({ error: "Failed to start email extractor" }, { status: 500 });
     }
   } catch (err) {
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    const message = err instanceof Error ? err.message : "Internal server error";
+    console.error("[extract/email] Error:", message, err);
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

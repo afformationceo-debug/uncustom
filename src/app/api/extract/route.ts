@@ -10,10 +10,11 @@ export async function POST(request: Request) {
   try {
     const supabase = await createClient();
     const body = await request.json();
-    const { campaign_id, type, source_id, platform, platforms, limit } = body;
+    const { campaign_id, type, source_id, platform, platforms, limit, platform_inputs } = body;
+    // platform_inputs: Record<string, Record<string, unknown>> - per-platform advanced Apify inputs
 
     // Support multi-platform: platforms is an array, platform is a single string (backward-compatible)
-    const targetPlatforms: string[] = platforms?.length > 0
+    let targetPlatforms: string[] = platforms?.length > 0
       ? platforms
       : platform ? [platform] : [];
 
@@ -28,13 +29,17 @@ export async function POST(request: Request) {
     if (type === "keyword") {
       const { data: keyword } = await supabase
         .from("keywords")
-        .select("keyword")
+        .select("keyword, platform, target_country")
         .eq("id", source_id)
         .single();
       if (!keyword) {
         return NextResponse.json({ error: "Keyword not found" }, { status: 404 });
       }
       sourceKeyword = keyword.keyword;
+      // If keyword has a specific platform (not "all"), narrow to that platform only
+      if (keyword.platform && keyword.platform !== "all") {
+        targetPlatforms = [keyword.platform];
+      }
     } else if (type === "tagged") {
       const { data: account } = await supabase
         .from("tagged_accounts")
@@ -57,21 +62,22 @@ export async function POST(request: Request) {
       let input: Record<string, unknown> = {};
 
       if (type === "keyword") {
-        // For Instagram keyword extraction, always use hashtag scraper
-        // (Reel scraper requires username, not keyword)
+        // Platform-specific keyword actors (Instagram→Reel, TikTok, YouTube, Twitter)
         actorId = PLATFORM_KEYWORD_ACTORS[plat];
         if (!actorId) {
           errors.push({ platform: plat, error: `No keyword actor for ${plat}` });
           continue;
         }
-        input = getDefaultInput(actorId, { keyword: sourceKeyword!, limit: limit ?? 50 });
+        const advInputs = platform_inputs?.[plat] as Record<string, unknown> | undefined;
+        input = getDefaultInput(actorId, { keyword: sourceKeyword!, limit: limit ?? 200 }, advInputs);
       } else if (type === "tagged") {
         actorId = PLATFORM_TAGGED_ACTORS[plat];
         if (!actorId) {
           errors.push({ platform: plat, error: `No tagged actor for ${plat} (currently Instagram only)` });
           continue;
         }
-        input = getDefaultInput(actorId, { username: sourceUsername!, limit: limit ?? 50 });
+        const advInputs = platform_inputs?.[plat] as Record<string, unknown> | undefined;
+        input = getDefaultInput(actorId, { username: sourceUsername!, limit: limit ?? 200 }, advInputs);
       }
 
       if (!actorId) {

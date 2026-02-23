@@ -1,15 +1,60 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef, Fragment } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Search, ExternalLink, Users } from "lucide-react";
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+} from "@/components/ui/tooltip";
+import {
+  Search,
+  ExternalLink,
+  Users,
+  Mail,
+  UserCheck,
+  TrendingUp,
+  Clock,
+  ChevronDown,
+  ChevronUp,
+  Globe,
+  Hash,
+  Tag,
+  Link2,
+  Heart,
+  MessageCircle,
+  Eye,
+  Play,
+  Image as ImageIcon,
+  X,
+  Copy,
+  CheckCircle2,
+  LayoutGrid,
+  Table2,
+  Upload,
+  FileSpreadsheet,
+  Loader2,
+} from "lucide-react";
 import { toast } from "sonner";
 import type { Tables } from "@/types/database";
 import { PLATFORMS } from "@/types/platform";
@@ -17,17 +62,1249 @@ import { useRealtime } from "@/hooks/use-realtime";
 
 type Influencer = Tables<"influencers">;
 type Campaign = Tables<"campaigns">;
+type InfluencerLink = Tables<"influencer_links">;
 
-// Map of influencer_id -> array of campaigns they are assigned to
 type CampaignAssignmentMap = Record<string, { id: string; name: string }[]>;
+type SortField = "follower_count" | "engagement_rate" | "created_at";
+type PlatformFilter = "instagram" | "tiktok" | "youtube" | "twitter";
+
+/** Escape LIKE/ILIKE wildcard characters */
+function escapeLike(str: string): string {
+  return str.replace(/[%_\\]/g, (c) => `\\${c}`);
+}
+type ViewMode = "card" | "table";
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
 
 const PLATFORM_BADGE_COLORS: Record<string, string> = {
-  instagram: "bg-pink-100 text-pink-700 border-pink-200",
-  tiktok: "bg-gray-100 text-gray-900 border-gray-300",
-  youtube: "bg-red-100 text-red-700 border-red-200",
-  twitter: "bg-blue-100 text-blue-700 border-blue-200",
-  threads: "bg-gray-100 text-gray-700 border-gray-300",
+  instagram: "bg-pink-100 text-pink-700 border-pink-200 dark:bg-pink-950 dark:text-pink-300 dark:border-pink-800",
+  tiktok: "bg-gray-100 text-gray-900 border-gray-300 dark:bg-gray-800 dark:text-gray-200 dark:border-gray-600",
+  youtube: "bg-red-100 text-red-700 border-red-200 dark:bg-red-950 dark:text-red-300 dark:border-red-800",
+  twitter: "bg-blue-100 text-blue-700 border-blue-200 dark:bg-blue-950 dark:text-blue-300 dark:border-blue-800",
+  threads: "bg-gray-100 text-gray-700 border-gray-300 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-600",
 };
+
+const PLATFORM_DOT_COLORS: Record<string, string> = {
+  instagram: "bg-gradient-to-r from-purple-500 to-pink-500",
+  tiktok: "bg-black dark:bg-white",
+  youtube: "bg-red-500",
+  twitter: "bg-blue-400",
+  threads: "bg-gray-500",
+};
+
+const PLATFORM_BORDER_COLORS: Record<string, string> = {
+  instagram: "border-l-pink-500",
+  tiktok: "border-l-gray-900 dark:border-l-gray-300",
+  youtube: "border-l-red-500",
+  twitter: "border-l-blue-400",
+  threads: "border-l-gray-500",
+};
+
+const SORT_OPTIONS: { value: SortField; label: string }[] = [
+  { value: "follower_count", label: "팔로워" },
+  { value: "engagement_rate", label: "참여율" },
+  { value: "created_at", label: "최신순" },
+];
+
+// Platform-specific column definitions
+type ColumnDef = {
+  key: string;
+  label: string;
+  render: (inf: Influencer, helpers: RenderHelpers) => React.ReactNode;
+  width?: string;
+};
+
+type RenderHelpers = {
+  formatCount: (n: number | null) => string;
+  formatEngagement: (rate: number | string | null) => string | null;
+  getProfileUrl: (inf: Influencer) => string;
+  getRawField: (inf: Influencer, field: string) => unknown;
+};
+
+function getProfileUrl(inf: Influencer): string {
+  if (inf.profile_url) return inf.profile_url;
+  const username = inf.username;
+  if (!username) return "#";
+  switch (inf.platform) {
+    case "instagram":
+      return `https://instagram.com/${username}`;
+    case "tiktok":
+      return `https://tiktok.com/@${username}`;
+    case "youtube":
+      return `https://youtube.com/@${username}`;
+    case "twitter":
+      return `https://x.com/${username}`;
+    default:
+      return "#";
+  }
+}
+
+function getRawField(inf: Influencer, field: string): unknown {
+  const raw = inf.raw_data as Record<string, unknown> | null;
+  if (!raw) return null;
+  return raw[field] ?? null;
+}
+
+function getEmailSourceBadge(source: string | null) {
+  if (!source) return null;
+  const sourceMap: Record<string, { label: string; className: string }> = {
+    bio: { label: "Bio", className: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300" },
+    business: { label: "Biz", className: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300" },
+    linktree: { label: "Link", className: "bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-300" },
+    "social-scraper": { label: "Social", className: "bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300" },
+    location: { label: "위치", className: "bg-cyan-100 text-cyan-700 dark:bg-cyan-950 dark:text-cyan-300" },
+    manual: { label: "수동", className: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300" },
+  };
+  const key = source.includes(":") ? source.split(":")[0] : source;
+  return sourceMap[key] ?? { label: source.length > 10 ? source.split(":")[0] : source, className: "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400" };
+}
+
+// Common columns appended to every platform view
+function getCommonTailColumns(): ColumnDef[] {
+  const keywordsCol: ColumnDef = {
+    key: "keywords",
+    label: "추출 키워드",
+    render: (inf) => {
+      const kws = inf.extracted_keywords as string[] | null;
+      const tags = inf.extracted_from_tags as string[] | null;
+      if (!kws?.length && !tags?.length) return <span className="text-muted-foreground text-xs">-</span>;
+      return (
+        <div className="flex items-center gap-1 flex-wrap">
+          {kws?.slice(0, 2).map((kw) => (
+            <span key={kw} className="inline-flex items-center gap-0.5 text-[10px] bg-violet-50 text-violet-700 dark:bg-violet-950 dark:text-violet-300 px-1.5 py-0 rounded">
+              <Hash className="w-2.5 h-2.5" />{kw}
+            </span>
+          ))}
+          {tags?.slice(0, 1).map((tag) => (
+            <span key={tag} className="inline-flex items-center gap-0.5 text-[10px] bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300 px-1.5 py-0 rounded">
+              <Tag className="w-2.5 h-2.5" />{tag}
+            </span>
+          ))}
+          {((kws?.length ?? 0) + (tags?.length ?? 0)) > 3 && (
+            <span className="text-[10px] text-muted-foreground">+{(kws?.length ?? 0) + (tags?.length ?? 0) - 3}</span>
+          )}
+        </div>
+      );
+    },
+  };
+
+  const dateCol: ColumnDef = {
+    key: "created_at",
+    label: "추출일",
+    render: (inf) => {
+      const date = inf.last_updated_at ?? inf.created_at;
+      if (!date) return <span className="text-muted-foreground text-xs">-</span>;
+      const d = new Date(date);
+      return (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="text-xs text-muted-foreground whitespace-nowrap cursor-default">
+              {d.toLocaleDateString("ko-KR", { month: "short", day: "numeric" })}
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>
+            {d.toLocaleString("ko-KR", { year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+          </TooltipContent>
+        </Tooltip>
+      );
+    },
+  };
+
+  return [keywordsCol, dateCol];
+}
+
+// ---------------------------------------------------------------------------
+// Column factory helpers (reduce duplication)
+// ---------------------------------------------------------------------------
+
+function colContentUrl(label: string): ColumnDef {
+  return {
+    key: "source_content_url",
+    label,
+    render: (inf) => {
+      const url = inf.source_content_url;
+      if (!url) return <span className="text-muted-foreground text-xs">-</span>;
+      return (
+        <a href={url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800">
+          <ExternalLink className="w-3.5 h-3.5" />
+        </a>
+      );
+    },
+  };
+}
+
+function colContentText(label: string): ColumnDef {
+  return {
+    key: "source_content_text",
+    label,
+    render: (inf) => {
+      const text = inf.source_content_text;
+      if (!text) return <span className="text-muted-foreground text-xs">-</span>;
+      return (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="text-xs text-muted-foreground truncate max-w-[120px] block cursor-default">
+              {text.slice(0, 40)}{text.length > 40 ? "..." : ""}
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" className="max-w-md whitespace-pre-wrap">{text.slice(0, 500)}</TooltipContent>
+        </Tooltip>
+      );
+    },
+  };
+}
+
+function colContentDate(label: string): ColumnDef {
+  return {
+    key: "source_content_created_at",
+    label,
+    render: (inf) => {
+      const date = inf.source_content_created_at;
+      if (!date) return <span className="text-muted-foreground text-xs">-</span>;
+      const d = new Date(date);
+      if (isNaN(d.getTime())) return <span className="text-muted-foreground text-xs">-</span>;
+      return (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="text-xs text-muted-foreground whitespace-nowrap cursor-default">
+              {d.toLocaleDateString("ko-KR", { month: "short", day: "numeric" })}
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>{d.toLocaleString("ko-KR")}</TooltipContent>
+        </Tooltip>
+      );
+    },
+  };
+}
+
+function colContentLang(label: string): ColumnDef {
+  return {
+    key: "content_language",
+    label,
+    render: (inf) => inf.content_language ? (
+      <Badge variant="outline" className="text-[10px] px-1.5 py-0">{inf.content_language}</Badge>
+    ) : (
+      <span className="text-muted-foreground text-xs">-</span>
+    ),
+  };
+}
+
+function colContentHashtags(label: string): ColumnDef {
+  return {
+    key: "content_hashtags",
+    label,
+    render: (inf) => {
+      const tags = inf.content_hashtags as string[] | null;
+      if (!tags?.length) return <span className="text-muted-foreground text-xs">-</span>;
+      return (
+        <div className="flex items-center gap-0.5 flex-wrap">
+          {tags.slice(0, 3).map((t) => (
+            <span key={t} className="text-[10px] bg-violet-50 text-violet-700 dark:bg-violet-950 dark:text-violet-300 px-1 py-0 rounded">
+              #{t}
+            </span>
+          ))}
+          {tags.length > 3 && <span className="text-[10px] text-muted-foreground">+{tags.length - 3}</span>}
+        </div>
+      );
+    },
+  };
+}
+
+function colLanguage(): ColumnDef {
+  return {
+    key: "language",
+    label: "언어",
+    render: (inf) => inf.language ? (
+      <Badge variant="outline" className="text-[10px] px-1.5 py-0">{inf.language}</Badge>
+    ) : (
+      <span className="text-muted-foreground text-xs">-</span>
+    ),
+  };
+}
+
+function colCountry(): ColumnDef {
+  return {
+    key: "country",
+    label: "국가",
+    render: (inf) => inf.country ? (
+      <Badge variant="outline" className="text-[10px] px-1.5 py-0">{inf.country}</Badge>
+    ) : (
+      <span className="text-muted-foreground text-xs">-</span>
+    ),
+  };
+}
+
+function colPrivate(): ColumnDef {
+  return {
+    key: "is_private",
+    label: "비공개",
+    render: (inf) => inf.is_private ? (
+      <Badge variant="outline" className="text-[10px] px-1 py-0 bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300">비공개</Badge>
+    ) : (
+      <span className="text-muted-foreground text-xs">-</span>
+    ),
+  };
+}
+
+function colVideoDuration(): ColumnDef {
+  return {
+    key: "video_duration",
+    label: "영상길이",
+    render: (inf) => {
+      const sec = inf.video_duration;
+      if (sec === null || sec === undefined) return <span className="text-muted-foreground text-xs">-</span>;
+      const m = Math.floor(sec / 60);
+      const s = sec % 60;
+      return <span className="text-xs text-muted-foreground">{m}:{String(s).padStart(2, "0")}</span>;
+    },
+  };
+}
+
+function colVideoTitle(): ColumnDef {
+  return {
+    key: "video_title",
+    label: "영상제목",
+    render: (inf) => {
+      const title = inf.video_title;
+      if (!title) return <span className="text-muted-foreground text-xs">-</span>;
+      return (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="text-xs truncate max-w-[120px] block cursor-default">{title.slice(0, 40)}{title.length > 40 ? "..." : ""}</span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" className="max-w-sm">{title}</TooltipContent>
+        </Tooltip>
+      );
+    },
+  };
+}
+
+function colAccountCreated(): ColumnDef {
+  return {
+    key: "account_created_at",
+    label: "계정등록일",
+    render: (inf) => {
+      const date = inf.account_created_at;
+      if (!date) return <span className="text-muted-foreground text-xs">-</span>;
+      const d = new Date(date);
+      if (isNaN(d.getTime())) return <span className="text-muted-foreground text-xs">-</span>;
+      return <span className="text-xs text-muted-foreground">{d.toLocaleDateString("ko-KR", { year: "numeric", month: "short" })}</span>;
+    },
+  };
+}
+
+function colCount(key: string, label: string): ColumnDef {
+  return {
+    key,
+    label,
+    render: (inf, helpers) => {
+      const val = (inf as Record<string, unknown>)[key] as number | null;
+      return <span className="text-sm">{helpers.formatCount(val)}</span>;
+    },
+  };
+}
+
+function colBool(key: string, label: string, trueLabel: string): ColumnDef {
+  return {
+    key,
+    label,
+    render: (inf) => {
+      const val = (inf as Record<string, unknown>)[key];
+      return val ? (
+        <Badge variant="outline" className="text-[10px] px-1 py-0">{trueLabel}</Badge>
+      ) : (
+        <span className="text-muted-foreground text-xs">-</span>
+      );
+    },
+  };
+}
+
+function colMentions(): ColumnDef {
+  return {
+    key: "mentions",
+    label: "멘션",
+    render: (inf) => {
+      const mentions = inf.mentions as string[] | null;
+      if (!mentions?.length) return <span className="text-muted-foreground text-xs">-</span>;
+      return (
+        <div className="flex items-center gap-0.5 flex-wrap">
+          {mentions.slice(0, 2).map((m) => (
+            <span key={m} className="text-[10px] bg-sky-50 text-sky-700 dark:bg-sky-950 dark:text-sky-300 px-1 py-0 rounded">
+              @{m}
+            </span>
+          ))}
+          {mentions.length > 2 && <span className="text-[10px] text-muted-foreground">+{mentions.length - 2}</span>}
+        </div>
+      );
+    },
+  };
+}
+
+function colMusicInfo(): ColumnDef {
+  return {
+    key: "music_info",
+    label: "음악",
+    render: (inf) => {
+      const info = inf.music_info as Record<string, unknown> | null;
+      if (!info) return <span className="text-muted-foreground text-xs">-</span>;
+      const artist = (info.music_author ?? info.authorName ?? info.artist ?? "") as string;
+      const title = (info.music_title ?? info.title ?? info.musicName ?? "") as string;
+      const display = [artist, title].filter(Boolean).join(" - ");
+      if (!display) return <span className="text-muted-foreground text-xs">-</span>;
+      return (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="text-xs text-muted-foreground truncate max-w-[100px] block cursor-default">{display.slice(0, 30)}{display.length > 30 ? "..." : ""}</span>
+          </TooltipTrigger>
+          <TooltipContent>{display}</TooltipContent>
+        </Tooltip>
+      );
+    },
+  };
+}
+
+function colProductType(): ColumnDef {
+  return {
+    key: "product_type",
+    label: "유형",
+    render: (inf) => {
+      const pt = inf.product_type;
+      if (!pt) return <span className="text-muted-foreground text-xs">-</span>;
+      return <Badge variant="outline" className="text-[10px] px-1.5 py-0">{pt}</Badge>;
+    },
+  };
+}
+
+function colLocation(): ColumnDef {
+  return {
+    key: "location",
+    label: "위치",
+    render: (inf) => {
+      if (!inf.location) return <span className="text-muted-foreground text-xs">-</span>;
+      return (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="text-xs text-muted-foreground truncate max-w-[80px] block cursor-default">
+              {inf.location.slice(0, 20)}{inf.location.length > 20 ? "..." : ""}
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>{inf.location}</TooltipContent>
+        </Tooltip>
+      );
+    },
+  };
+}
+
+function colCoverImage(): ColumnDef {
+  return {
+    key: "cover_image_url",
+    label: "커버",
+    render: (inf) => {
+      const url = inf.cover_image_url;
+      if (!url) return <span className="text-muted-foreground text-xs">-</span>;
+      return (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <img src={url} alt="" className="w-8 h-5 rounded object-cover cursor-pointer" referrerPolicy="no-referrer" loading="lazy" />
+          </TooltipTrigger>
+          <TooltipContent><img src={url} alt="" className="w-48 rounded" referrerPolicy="no-referrer" /></TooltipContent>
+        </Tooltip>
+      );
+    },
+  };
+}
+
+// Columns for each platform view
+function getColumnsForPlatform(platform: PlatformFilter): ColumnDef[] {
+  const tail = getCommonTailColumns();
+
+  const profileCol: ColumnDef = {
+    key: "profile",
+    label: "",
+    width: "w-10",
+    render: (inf) => {
+      const needsEnrich = inf.platform === "instagram" && (!inf.follower_count || !inf.profile_image_url);
+      return (
+        <div className="flex items-center justify-center relative">
+          {inf.profile_image_url ? (
+            <img
+              src={inf.profile_image_url}
+              alt=""
+              className="w-8 h-8 rounded-full object-cover ring-1 ring-muted"
+              referrerPolicy="no-referrer"
+              loading="lazy"
+              onError={(e) => {
+                // CDN URL expired - show fallback
+                (e.target as HTMLImageElement).style.display = "none";
+                const fallback = (e.target as HTMLImageElement).nextElementSibling;
+                if (fallback) (fallback as HTMLElement).style.display = "flex";
+              }}
+            />
+          ) : null}
+          <div
+            className="w-8 h-8 rounded-full bg-muted flex items-center justify-center"
+            style={{ display: inf.profile_image_url ? "none" : "flex" }}
+          >
+            <Users className="w-3.5 h-3.5 text-muted-foreground" />
+          </div>
+          {needsEnrich && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-amber-400 border border-background" />
+              </TooltipTrigger>
+              <TooltipContent>프로필 보강 필요 (팔로워/프로필사진 미수집)</TooltipContent>
+            </Tooltip>
+          )}
+        </div>
+      );
+    },
+  };
+
+  const usernameCol: ColumnDef = {
+    key: "username",
+    label: "유저네임",
+    render: (inf, helpers) => (
+      <div className="flex items-center gap-1.5 min-w-0">
+        <a
+          href={helpers.getProfileUrl(inf)}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-sm font-medium hover:text-primary transition-colors truncate max-w-[180px]"
+          title={`@${inf.username ?? ""}`}
+        >
+          @{inf.username ?? "-"}
+        </a>
+        {inf.display_name && inf.display_name !== inf.username && (
+          <span className="text-xs text-muted-foreground truncate max-w-[120px]" title={inf.display_name}>
+            {inf.display_name}
+          </span>
+        )}
+      </div>
+    ),
+  };
+
+  const emailCol: ColumnDef = {
+    key: "email",
+    label: "이메일",
+    render: (inf) =>
+      inf.email ? (
+        <div className="flex items-center gap-1.5">
+          <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-green-100 dark:bg-green-950 flex-shrink-0">
+            <Mail className="w-3 h-3 text-green-600 dark:text-green-400" />
+          </span>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="text-xs truncate max-w-[140px] block cursor-default font-medium text-green-700 dark:text-green-400">
+                {inf.email}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>{inf.email}</TooltipContent>
+          </Tooltip>
+        </div>
+      ) : (
+        <span className="text-muted-foreground text-xs">-</span>
+      ),
+  };
+
+  const followersCol: ColumnDef = {
+    key: "followers",
+    label: "팔로워",
+    render: (inf, helpers) => {
+      if (inf.follower_count === null && inf.platform === "instagram") {
+        return <span className="text-[10px] text-amber-500">보강 대기</span>;
+      }
+      return <span className="text-sm font-medium">{helpers.formatCount(inf.follower_count)}</span>;
+    },
+  };
+
+  const bioCol: ColumnDef = {
+    key: "bio",
+    label: "바이오",
+    render: (inf) =>
+      inf.bio ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="text-xs text-muted-foreground truncate max-w-[200px] block cursor-default">
+              {inf.bio.slice(0, 50)}{inf.bio.length > 50 ? "..." : ""}
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" className="max-w-md whitespace-pre-wrap">
+            {inf.bio}
+          </TooltipContent>
+        </Tooltip>
+      ) : (
+        <span className="text-muted-foreground text-xs">-</span>
+      ),
+  };
+
+  if (platform === "instagram") {
+    return [
+      profileCol,
+      usernameCol,
+      {
+        key: "country",
+        label: "국가",
+        render: (inf) => inf.country ? (
+          <Badge variant="outline" className="text-[10px] px-1.5 py-0">{inf.country}</Badge>
+        ) : (
+          <span className="text-muted-foreground text-xs">-</span>
+        ),
+      },
+      followersCol,
+      {
+        key: "following",
+        label: "팔로잉",
+        render: (inf, helpers) => (
+          <span className="text-sm">{helpers.formatCount(inf.following_count)}</span>
+        ),
+      },
+      {
+        key: "posts",
+        label: "게시물",
+        render: (inf, helpers) => (
+          <span className="text-sm">{helpers.formatCount(inf.post_count)}</span>
+        ),
+      },
+      {
+        key: "engagement",
+        label: "참여율 ℹ️",
+        render: (inf, helpers) => {
+          const val = helpers.formatEngagement(inf.engagement_rate);
+          return val ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="text-sm text-green-600 dark:text-green-400 font-medium cursor-default">{val}</span>
+              </TooltipTrigger>
+              <TooltipContent>Instagram: (좋아요+댓글) / 팔로워</TooltipContent>
+            </Tooltip>
+          ) : (
+            <span className="text-muted-foreground text-xs">-</span>
+          );
+        },
+      },
+      bioCol,
+      emailCol,
+      {
+        key: "email_source",
+        label: "출처",
+        render: (inf) => {
+          if (!inf.email_source) return <span className="text-muted-foreground text-xs">-</span>;
+          const badge = getEmailSourceBadge(inf.email_source);
+          if (!badge) return <span className="text-muted-foreground text-xs">-</span>;
+          return <span className={`text-[10px] px-1.5 py-0.5 rounded ${badge.className}`}>{badge.label}</span>;
+        },
+      },
+      {
+        key: "is_verified",
+        label: "인증",
+        render: (inf) => inf.is_verified ? (
+          <CheckCircle2 className="w-4 h-4 text-blue-500" />
+        ) : (
+          <span className="text-muted-foreground text-xs">-</span>
+        ),
+      },
+      {
+        key: "is_business",
+        label: "비즈",
+        render: (inf) => inf.is_business ? (
+          <Badge variant="outline" className="text-[10px] px-1 py-0 bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950 dark:text-emerald-300">Biz</Badge>
+        ) : (
+          <span className="text-muted-foreground text-xs">-</span>
+        ),
+      },
+      {
+        key: "category",
+        label: "카테고리",
+        render: (inf) => inf.category ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="text-xs truncate max-w-[80px] block cursor-default">{inf.category}</span>
+            </TooltipTrigger>
+            <TooltipContent>{inf.category}</TooltipContent>
+          </Tooltip>
+        ) : (
+          <span className="text-muted-foreground text-xs">-</span>
+        ),
+      },
+      {
+        key: "external_url",
+        label: "외부 URL",
+        render: (inf) => {
+          const url = inf.external_url;
+          if (!url) return <span className="text-muted-foreground text-xs">-</span>;
+          let hostname = "";
+          try { hostname = new URL(url).hostname.replace("www.", ""); } catch { hostname = url.slice(0, 30); }
+          return (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <a
+                  href={url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-blue-600 hover:text-blue-800 truncate max-w-[120px] block"
+                >
+                  {hostname}
+                </a>
+              </TooltipTrigger>
+              <TooltipContent>{url}</TooltipContent>
+            </Tooltip>
+          );
+        },
+      },
+      colCount("avg_likes", "평균좋아요"),
+      colCount("avg_comments", "평균댓글"),
+      colCount("avg_views", "평균조회"),
+      colLanguage(),
+      colContentUrl("콘텐츠URL"),
+      colContentText("캡션"),
+      colContentDate("콘텐츠일"),
+      colContentLang("콘텐츠언어"),
+      colContentHashtags("해시태그"),
+      colPrivate(),
+      colVideoDuration(),
+      colBool("is_sponsored", "광고", "Ad"),
+      colMentions(),
+      colMusicInfo(),
+      colProductType(),
+      colLocation(),
+      ...tail,
+    ];
+  }
+
+  if (platform === "tiktok") {
+    return [
+      profileCol,
+      usernameCol,
+      followersCol,
+      {
+        key: "following",
+        label: "팔로잉",
+        render: (inf, helpers) => (
+          <span className="text-sm">{helpers.formatCount(inf.following_count)}</span>
+        ),
+      },
+      {
+        key: "heart_count",
+        label: "총 좋아요",
+        render: (inf, helpers) => (
+          <span className="text-sm">{helpers.formatCount(inf.heart_count)}</span>
+        ),
+      },
+      {
+        key: "videos",
+        label: "동영상",
+        render: (inf, helpers) => {
+          const videoCount = (helpers.getRawField(inf, "videoCount") ?? inf.post_count) as number | null;
+          return <span className="text-sm">{helpers.formatCount(videoCount ?? null)}</span>;
+        },
+      },
+      {
+        key: "engagement",
+        label: "참여율 ℹ️",
+        render: (inf, helpers) => {
+          const val = helpers.formatEngagement(inf.engagement_rate);
+          return val ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="text-sm text-green-600 dark:text-green-400 font-medium cursor-default">{val}</span>
+              </TooltipTrigger>
+              <TooltipContent>TikTok: (좋아요+댓글+공유) / 조회수</TooltipContent>
+            </Tooltip>
+          ) : (
+            <span className="text-muted-foreground text-xs">-</span>
+          );
+        },
+      },
+      bioCol,
+      emailCol,
+      {
+        key: "email_source",
+        label: "출처",
+        render: (inf) => {
+          if (!inf.email_source) return <span className="text-muted-foreground text-xs">-</span>;
+          const badge = getEmailSourceBadge(inf.email_source);
+          if (!badge) return <span className="text-muted-foreground text-xs">-</span>;
+          return <span className={`text-[10px] px-1.5 py-0.5 rounded ${badge.className}`}>{badge.label}</span>;
+        },
+      },
+      {
+        key: "is_verified",
+        label: "인증",
+        render: (inf) => inf.is_verified ? (
+          <CheckCircle2 className="w-4 h-4 text-blue-500" />
+        ) : (
+          <span className="text-muted-foreground text-xs">-</span>
+        ),
+      },
+      colCount("avg_likes", "평균좋아요"),
+      colCount("avg_comments", "평균댓글"),
+      colCount("avg_shares", "평균공유"),
+      colCount("avg_views", "평균재생"),
+      {
+        key: "external_url",
+        label: "바이오링크",
+        render: (inf) => {
+          if (!inf.external_url) return <span className="text-muted-foreground text-xs">-</span>;
+          let hostname = "";
+          try { hostname = new URL(inf.external_url).hostname.replace("www.", ""); } catch { hostname = (inf.external_url).slice(0, 30); }
+          return (
+            <a href={inf.external_url} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-600 hover:text-blue-800 truncate max-w-[100px] block">
+              {hostname}
+            </a>
+          );
+        },
+      },
+      colCountry(),
+      colLanguage(),
+      colLocation(),
+      colCount("share_count", "총공유"),
+      colContentUrl("콘텐츠URL"),
+      colContentText("콘텐츠"),
+      colContentDate("게시일"),
+      colContentLang("콘텐츠언어"),
+      colContentHashtags("해시태그"),
+      colCount("bookmark_count", "북마크"),
+      colCount("quote_count", "리포스트"),
+      colCount("favourites_count", "좋아요한수"),
+      colVideoDuration(),
+      colPrivate(),
+      colBool("is_sponsored", "광고", "Ad"),
+      colMentions(),
+      colMusicInfo(),
+      colProductType(),
+      ...tail,
+    ];
+  }
+
+  if (platform === "youtube") {
+    return [
+      profileCol,
+      {
+        key: "channel",
+        label: "채널명",
+        render: (inf, helpers) => (
+          <a
+            href={helpers.getProfileUrl(inf)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-sm font-medium hover:text-primary transition-colors truncate max-w-[180px] block"
+          >
+            {inf.display_name ?? inf.username ?? "-"}
+          </a>
+        ),
+      },
+      {
+        key: "subscribers",
+        label: "구독자",
+        render: (inf, helpers) => (
+          <span className="text-sm font-medium">{helpers.formatCount(inf.follower_count)}</span>
+        ),
+      },
+      {
+        key: "videos",
+        label: "동영상",
+        render: (inf, helpers) => {
+          const videoCount = (helpers.getRawField(inf, "videoCount") ?? inf.post_count) as number | null;
+          return <span className="text-sm">{helpers.formatCount(videoCount ?? null)}</span>;
+        },
+      },
+      {
+        key: "total_views",
+        label: "총 조회수",
+        render: (inf, helpers) => (
+          <span className="text-sm">{helpers.formatCount(inf.total_views)}</span>
+        ),
+      },
+      {
+        key: "description",
+        label: "설명",
+        render: (inf) => {
+          const desc = inf.bio;
+          if (!desc) return <span className="text-muted-foreground text-xs">-</span>;
+          return (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="text-xs text-muted-foreground truncate max-w-[200px] block cursor-default">
+                  {desc.slice(0, 50)}{desc.length > 50 ? "..." : ""}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="max-w-md whitespace-pre-wrap">{desc}</TooltipContent>
+            </Tooltip>
+          );
+        },
+      },
+      emailCol,
+      {
+        key: "email_source",
+        label: "출처",
+        render: (inf) => {
+          if (!inf.email_source) return <span className="text-muted-foreground text-xs">-</span>;
+          const badge = getEmailSourceBadge(inf.email_source);
+          if (!badge) return <span className="text-muted-foreground text-xs">-</span>;
+          return <span className={`text-[10px] px-1.5 py-0.5 rounded ${badge.className}`}>{badge.label}</span>;
+        },
+      },
+      {
+        key: "is_monetized",
+        label: "수익화",
+        render: (inf) => inf.is_monetized ? (
+          <Badge variant="outline" className="text-[10px] px-1 py-0 bg-green-50 text-green-700 border-green-200 dark:bg-green-950 dark:text-green-300">수익화</Badge>
+        ) : (
+          <span className="text-muted-foreground text-xs">-</span>
+        ),
+      },
+      {
+        key: "location",
+        label: "국가",
+        render: (inf) => inf.location ? (
+          <Badge variant="outline" className="text-[10px] px-1.5 py-0">{inf.location}</Badge>
+        ) : (
+          <span className="text-muted-foreground text-xs">-</span>
+        ),
+      },
+      {
+        key: "channel_joined_date",
+        label: "채널생성일",
+        render: (inf) => inf.channel_joined_date ? (
+          <span className="text-xs text-muted-foreground">{new Date(inf.channel_joined_date).toLocaleDateString("ko-KR", { year: "numeric", month: "short" })}</span>
+        ) : (
+          <span className="text-muted-foreground text-xs">-</span>
+        ),
+      },
+      colCount("avg_views", "평균조회"),
+      colCount("avg_likes", "평균좋아요"),
+      colCount("avg_comments", "평균댓글"),
+      {
+        key: "external_url",
+        label: "채널URL",
+        render: (inf) => {
+          if (!inf.external_url) return <span className="text-muted-foreground text-xs">-</span>;
+          return (
+            <a href={inf.external_url} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-600 hover:text-blue-800">
+              <ExternalLink className="w-3.5 h-3.5" />
+            </a>
+          );
+        },
+      },
+      colCountry(),
+      colLanguage(),
+      colContentUrl("콘텐츠URL"),
+      colVideoTitle(),
+      colContentText("영상설명"),
+      colContentDate("게시일"),
+      colContentLang("콘텐츠언어"),
+      colContentHashtags("태그"),
+      colAccountCreated(),
+      colVideoDuration(),
+      colProductType(),
+      ...tail,
+    ];
+  }
+
+  if (platform === "twitter") {
+    return [
+      profileCol,
+      usernameCol,
+      {
+        key: "display_name",
+        label: "표시명",
+        render: (inf) => inf.display_name ? (
+          <span className="text-xs truncate max-w-[120px] block">{inf.display_name}</span>
+        ) : (
+          <span className="text-muted-foreground text-xs">-</span>
+        ),
+      },
+      followersCol,
+      {
+        key: "following",
+        label: "팔로잉",
+        render: (inf, helpers) => (
+          <span className="text-sm">{helpers.formatCount(inf.following_count)}</span>
+        ),
+      },
+      {
+        key: "tweets",
+        label: "트윗",
+        render: (inf, helpers) => (
+          <span className="text-sm">{helpers.formatCount(inf.post_count)}</span>
+        ),
+      },
+      bioCol,
+      emailCol,
+      {
+        key: "email_source",
+        label: "출처",
+        render: (inf) => {
+          if (!inf.email_source) return <span className="text-muted-foreground text-xs">-</span>;
+          const badge = getEmailSourceBadge(inf.email_source);
+          if (!badge) return <span className="text-muted-foreground text-xs">-</span>;
+          return <span className={`text-[10px] px-1.5 py-0.5 rounded ${badge.className}`}>{badge.label}</span>;
+        },
+      },
+      {
+        key: "is_verified",
+        label: "인증",
+        render: (inf) => inf.is_verified ? (
+          <CheckCircle2 className="w-4 h-4 text-blue-500" />
+        ) : (
+          <span className="text-muted-foreground text-xs">-</span>
+        ),
+      },
+      {
+        key: "is_blue_verified",
+        label: "Blue",
+        render: (inf) => inf.is_blue_verified ? (
+          <Badge variant="outline" className="text-[10px] px-1 py-0 bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950 dark:text-blue-300">Blue</Badge>
+        ) : (
+          <span className="text-muted-foreground text-xs">-</span>
+        ),
+      },
+      {
+        key: "verified_type",
+        label: "인증유형",
+        render: (inf) => inf.verified_type ? (
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300">{inf.verified_type}</span>
+        ) : (
+          <span className="text-muted-foreground text-xs">-</span>
+        ),
+      },
+      {
+        key: "location",
+        label: "위치",
+        render: (inf) => {
+          if (!inf.location) return <span className="text-muted-foreground text-xs">-</span>;
+          return (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="text-xs text-muted-foreground truncate max-w-[100px] block cursor-default">
+                  {inf.location.slice(0, 20)}{inf.location.length > 20 ? "..." : ""}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>{inf.location}</TooltipContent>
+            </Tooltip>
+          );
+        },
+      },
+      {
+        key: "external_url",
+        label: "웹사이트",
+        render: (inf) => {
+          if (!inf.external_url) return <span className="text-muted-foreground text-xs">-</span>;
+          let hostname = "";
+          try { hostname = new URL(inf.external_url).hostname.replace("www.", ""); } catch { hostname = (inf.external_url).slice(0, 20); }
+          return (
+            <a href={inf.external_url} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-600 hover:text-blue-800 truncate max-w-[100px] block">
+              {hostname}
+            </a>
+          );
+        },
+      },
+      colCount("avg_likes", "평균좋아요"),
+      colCount("avg_shares", "평균RT"),
+      colCount("avg_comments", "평균답글"),
+      colCount("avg_views", "평균조회"),
+      colContentUrl("트윗URL"),
+      colContentText("트윗"),
+      colContentDate("트윗일"),
+      colContentLang("트윗언어"),
+      colContentHashtags("해시태그"),
+      colAccountCreated(),
+      colCoverImage(),
+      colCount("bookmark_count", "북마크"),
+      colCount("quote_count", "인용"),
+      colCount("favourites_count", "좋아요한수"),
+      colCount("listed_count", "리스트수"),
+      colCount("media_count", "미디어수"),
+      colBool("is_retweet", "RT여부", "RT"),
+      colBool("is_reply", "답글여부", "Reply"),
+      colMentions(),
+      colCountry(),
+      colLanguage(),
+      ...tail,
+    ];
+  }
+
+  // Fallback: use instagram columns (should not be reached since "all" tab is removed)
+  return [
+    profileCol,
+    usernameCol,
+    followersCol,
+    bioCol,
+    emailCol,
+    ...tail,
+  ];
+}
+
+
+// ---------------------------------------------------------------------------
+// Content thumbnails extraction from raw_data
+// ---------------------------------------------------------------------------
+
+type ContentPost = {
+  imageUrl?: string;
+  videoUrl?: string;
+  caption?: string;
+  likes?: number;
+  comments?: number;
+  views?: number;
+  url?: string;
+  type?: string; // image, video, Image, Video, etc.
+};
+
+function getContentPosts(inf: Influencer): ContentPost[] {
+  const raw = inf.raw_data as Record<string, unknown> | null;
+  if (!raw) return [];
+  const posts: ContentPost[] = [];
+  const MAX_POSTS = 12;
+  const seenUrls = new Set<string>();
+
+  function addPost(p: ContentPost) {
+    if (posts.length >= MAX_POSTS) return;
+    const key = p.imageUrl || p.videoUrl || p.url || "";
+    if (key && seenUrls.has(key)) return;
+    if (key) seenUrls.add(key);
+    posts.push(p);
+  }
+
+  function isValidUrl(u: unknown): u is string {
+    return typeof u === "string" && u.startsWith("http");
+  }
+
+  // Source 1: latestPosts from Instagram Profile Scraper (best source - has multiple posts)
+  const latestPosts = (raw.latestPosts ?? raw.recentPosts) as Record<string, unknown>[] | undefined;
+  if (Array.isArray(latestPosts)) {
+    for (const post of latestPosts) {
+      const imgUrl = (post?.displayUrl ?? post?.thumbnailSrc ?? post?.imageUrl) as string | undefined;
+      const vidUrl = (post?.videoUrl) as string | undefined;
+      if (isValidUrl(imgUrl) || isValidUrl(vidUrl)) {
+        addPost({
+          imageUrl: isValidUrl(imgUrl) ? imgUrl : undefined,
+          videoUrl: isValidUrl(vidUrl) ? vidUrl : undefined,
+          caption: (post?.caption as string) ?? undefined,
+          likes: (post?.likesCount as number) ?? undefined,
+          comments: (post?.commentsCount as number) ?? undefined,
+          views: (post?.videoViewCount as number) ?? undefined,
+          url: (post?.url as string) ?? undefined,
+          type: (post?.type as string) ?? (isValidUrl(vidUrl) ? "Video" : "Image"),
+        });
+      }
+    }
+  }
+
+  // Source 2: _collectedPosts from extraction pipeline (accumulated posts per user)
+  const collectedPosts = raw._collectedPosts as Record<string, unknown>[] | undefined;
+  if (Array.isArray(collectedPosts)) {
+    for (const post of collectedPosts) {
+      const imgUrl = post?.displayUrl as string | undefined;
+      const vidUrl = post?.videoUrl as string | undefined;
+      if (isValidUrl(imgUrl) || isValidUrl(vidUrl)) {
+        addPost({
+          imageUrl: isValidUrl(imgUrl) ? imgUrl : undefined,
+          videoUrl: isValidUrl(vidUrl) ? vidUrl : undefined,
+          caption: (post?.caption as string) ?? undefined,
+          likes: (post?.likesCount as number) ?? undefined,
+          comments: (post?.commentsCount as number) ?? undefined,
+          views: (post?.viewCount as number) ?? undefined,
+          url: (post?.url as string) ?? undefined,
+          type: (post?.type as string) ?? (isValidUrl(vidUrl) ? "Video" : "Image"),
+        });
+      }
+    }
+  }
+
+  // Source 3: Single post at top level (hashtag/reel scraper - single item)
+  if (posts.length === 0) {
+    const imgUrl = (raw.displayUrl ?? raw.thumbnailSrc) as string | undefined;
+    const vidUrl = raw.videoUrl as string | undefined;
+    if (isValidUrl(imgUrl) || isValidUrl(vidUrl)) {
+      addPost({
+        imageUrl: isValidUrl(imgUrl) ? imgUrl : undefined,
+        videoUrl: isValidUrl(vidUrl) ? vidUrl : undefined,
+        caption: (raw.caption as string) ?? undefined,
+        likes: (raw.likesCount as number) ?? undefined,
+        comments: (raw.commentsCount as number) ?? undefined,
+        url: (raw.url as string) ?? undefined,
+        type: isValidUrl(vidUrl) ? "Video" : "Image",
+      });
+    }
+  }
+
+  // Source 4: TikTok video cover
+  if (posts.length === 0) {
+    const videoMeta = raw.videoMeta as Record<string, unknown> | undefined;
+    const covers = raw.covers as Record<string, unknown> | undefined;
+    const coverUrl = (videoMeta?.coverUrl ?? covers?.default) as string | undefined;
+    const vidUrl = (raw.videoUrl ?? videoMeta?.downloadAddr) as string | undefined;
+    if (isValidUrl(coverUrl)) {
+      addPost({
+        imageUrl: coverUrl,
+        videoUrl: isValidUrl(vidUrl) ? vidUrl : undefined,
+        caption: (raw.text as string) ?? undefined,
+        likes: (raw.diggCount as number) ?? undefined,
+        comments: (raw.commentCount as number) ?? undefined,
+        views: (raw.playCount as number) ?? undefined,
+        url: (raw.webVideoUrl ?? raw.url) as string | undefined,
+        type: "Video",
+      });
+    }
+  }
+
+  // Source 5: YouTube thumbnail
+  if (posts.length === 0) {
+    const thumbUrl = (raw.thumbnailUrl ?? raw.thumbnail) as string | undefined;
+    if (isValidUrl(thumbUrl)) {
+      addPost({
+        imageUrl: thumbUrl,
+        caption: (raw.title as string) ?? undefined,
+        views: (raw.viewCount as number) ?? undefined,
+        url: (raw.url as string) ?? undefined,
+        type: "Video",
+      });
+    }
+  }
+
+  // Source 6: Twitter media array
+  if (posts.length === 0 && Array.isArray(raw.media)) {
+    for (const m of raw.media as Record<string, unknown>[]) {
+      const mUrl = (m?.media_url_https ?? m?.url) as string | undefined;
+      const vidVariants = m?.video_info as Record<string, unknown> | undefined;
+      const vidUrl = (vidVariants?.variants as Record<string, unknown>[] | undefined)?.[0]?.url as string | undefined;
+      if (isValidUrl(mUrl)) {
+        addPost({
+          imageUrl: mUrl,
+          videoUrl: isValidUrl(vidUrl) ? vidUrl : undefined,
+          type: m?.type === "video" ? "Video" : "Image",
+        });
+      }
+    }
+  }
+
+  // Source 7: Generic posts array
+  if (posts.length === 0 && Array.isArray(raw.posts)) {
+    for (const post of raw.posts as Record<string, unknown>[]) {
+      const imgUrl = (post?.displayUrl ?? post?.thumbnailSrc ?? post?.thumbnailUrl ?? post?.coverUrl) as string | undefined;
+      const vidUrl = post?.videoUrl as string | undefined;
+      if (isValidUrl(imgUrl)) {
+        addPost({
+          imageUrl: imgUrl,
+          videoUrl: isValidUrl(vidUrl) ? vidUrl : undefined,
+          caption: (post?.caption as string) ?? undefined,
+          likes: (post?.likesCount as number) ?? undefined,
+          comments: (post?.commentsCount as number) ?? undefined,
+          url: (post?.url as string) ?? undefined,
+        });
+      }
+    }
+  }
+
+  return posts;
+}
+
+// ---------------------------------------------------------------------------
+// Main Component
+// ---------------------------------------------------------------------------
 
 export default function MasterPage() {
   const supabase = createClient();
@@ -36,13 +1313,23 @@ export default function MasterPage() {
   const [loading, setLoading] = useState(true);
   const [total, setTotal] = useState(0);
   const [searchQuery, setSearchQuery] = useState("");
-  const [platformFilter, setPlatformFilter] = useState<string>("all");
+  const [platformFilter, setPlatformFilter] = useState<PlatformFilter>("instagram");
   const [emailFilter, setEmailFilter] = useState<string>("all");
   const [followerMin, setFollowerMin] = useState("");
   const [followerMax, setFollowerMax] = useState("");
   const [countryFilter, setCountryFilter] = useState("");
+  const [verifiedFilter, setVerifiedFilter] = useState<string>("all");
+  const [businessFilter, setBusinessFilter] = useState<string>("all");
+  const [categoryFilter, setCategoryFilter] = useState("");
+  const [enrichedFilter, setEnrichedFilter] = useState<string>("all");
+  const [importSourceFilter, setImportSourceFilter] = useState("");
   const [page, setPage] = useState(0);
-  const pageSize = 50;
+  const [sortField, setSortField] = useState<SortField>("follower_count");
+  const pageSize = 100;
+
+  // Stats
+  const [platformCounts, setPlatformCounts] = useState<Record<string, number>>({});
+  const [emailCount, setEmailCount] = useState(0);
 
   // Selection state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -52,48 +1339,120 @@ export default function MasterPage() {
   const [selectedCampaignId, setSelectedCampaignId] = useState<string>("");
   const [assigning, setAssigning] = useState(false);
 
-  // Campaign assignments for each influencer (for the "campaign" column)
+  // Campaign assignments for each influencer
   const [campaignAssignments, setCampaignAssignments] = useState<CampaignAssignmentMap>({});
+
+  // Influencer links
+  const [influencerLinks, setInfluencerLinks] = useState<Record<string, InfluencerLink[]>>({});
+
+  // Expanded row
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  // View mode: card (default) or table
+  const [viewMode, setViewMode] = useState<ViewMode>("card");
+
+  // Video modal state
+  const [modalPost, setModalPost] = useState<ContentPost | null>(null);
+
+  // Excel import state
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState<string>("");
+  const [importResult, setImportResult] = useState<{
+    total_parsed: number;
+    duplicates_removed: number;
+    unique_rows: number;
+    upserted: number;
+    errors: number;
+    sheets: { sheet: string; country: string; rows: number }[];
+  } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Enrichment dashboard state
+  const [enrichStats, setEnrichStats] = useState<{
+    total: number;
+    enriched: number;
+    unenriched: number;
+    high_priority_unenriched: number;
+    with_email: number;
+    enrichment_rate: number;
+    running_jobs: { id: string; apify_run_id: string; created_at: string }[];
+  } | null>(null);
+  const [enriching, setEnriching] = useState(false);
+  const [showEnrichPanel, setShowEnrichPanel] = useState(false);
+
+  // CSV state
+  const [csvImporting, setCsvImporting] = useState(false);
+  const [csvExporting, setCsvExporting] = useState(false);
+  const csvFileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     fetchCampaigns();
+    fetchPlatformCounts();
   }, []);
 
   useEffect(() => {
     fetchInfluencers();
-  }, [platformFilter, emailFilter, page]);
+  }, [platformFilter, emailFilter, page, sortField, verifiedFilter, businessFilter, enrichedFilter, countryFilter, followerMin, followerMax, categoryFilter, importSourceFilter]);
 
-  // Fetch campaign assignments for current page influencers
   useEffect(() => {
     if (influencers.length > 0) {
-      fetchCampaignAssignments(influencers.map((inf) => inf.id));
+      const ids = influencers.map((inf) => inf.id);
+      fetchCampaignAssignments(ids);
+      fetchInfluencerLinks(ids);
     }
   }, [influencers]);
 
-  // Clear selection when page changes
-  useEffect(() => {
-    setSelectedIds(new Set());
-  }, [page]);
+  // Selection persists across pages - no reset on page change
 
+  // Debounced realtime callback to prevent re-fetch storms on bulk updates
+  const realtimeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const realtimeCallback = useCallback(() => {
-    fetchInfluencers();
-  }, [platformFilter, emailFilter, page]);
-  useRealtime("influencers", undefined, realtimeCallback);
+    if (realtimeTimerRef.current) clearTimeout(realtimeTimerRef.current);
+    realtimeTimerRef.current = setTimeout(() => {
+      fetchInfluencers();
+      fetchPlatformCounts();
+    }, 2000);
+  }, [platformFilter, emailFilter, page, sortField, countryFilter, followerMin, followerMax]);
+  useRealtime("influencers", `platform=eq.${platformFilter}`, realtimeCallback);
+
+  // ---------------------------------------------------------------------------
+  // Data fetching
+  // ---------------------------------------------------------------------------
+
+  async function fetchPlatformCounts() {
+    const [platformResults, emailResult] = await Promise.all([
+      Promise.all(
+        PLATFORMS.map(async (p) => {
+          const { count } = await supabase
+            .from("influencers")
+            .select("id", { count: "exact", head: true })
+            .eq("platform", p.value);
+          return { platform: p.value, count: count ?? 0 };
+        })
+      ),
+      supabase
+        .from("influencers")
+        .select("id", { count: "exact", head: true })
+        .not("email", "is", null),
+    ]);
+
+    const counts: Record<string, number> = {};
+    for (const r of platformResults) counts[r.platform] = r.count;
+    setPlatformCounts(counts);
+    setEmailCount(emailResult.count ?? 0);
+  }
 
   async function fetchCampaigns() {
     const { data } = await supabase
       .from("campaigns")
       .select("*")
       .order("created_at", { ascending: false });
-
-    if (data) {
-      setCampaigns(data as Campaign[]);
-    }
+    if (data) setCampaigns(data as Campaign[]);
   }
 
   async function fetchCampaignAssignments(influencerIds: string[]) {
     if (influencerIds.length === 0) return;
-
     const { data } = await supabase
       .from("campaign_influencers")
       .select("influencer_id, campaign_id, campaigns(id, name)")
@@ -106,56 +1465,57 @@ export default function MasterPage() {
         campaign_id: string;
         campaigns: { id: string; name: string };
       }[]) {
-        if (!map[row.influencer_id]) {
-          map[row.influencer_id] = [];
-        }
+        if (!map[row.influencer_id]) map[row.influencer_id] = [];
         if (row.campaigns) {
-          map[row.influencer_id].push({
-            id: row.campaigns.id,
-            name: row.campaigns.name,
-          });
+          map[row.influencer_id].push({ id: row.campaigns.id, name: row.campaigns.name });
         }
       }
       setCampaignAssignments(map);
     }
   }
 
+  async function fetchInfluencerLinks(influencerIds: string[]) {
+    if (influencerIds.length === 0) return;
+    const { data } = await supabase
+      .from("influencer_links")
+      .select("*")
+      .in("influencer_id", influencerIds);
+    if (data) {
+      const map: Record<string, InfluencerLink[]> = {};
+      for (const link of data as InfluencerLink[]) {
+        if (!map[link.influencer_id]) map[link.influencer_id] = [];
+        map[link.influencer_id].push(link);
+      }
+      setInfluencerLinks(map);
+    }
+  }
+
   async function fetchInfluencers() {
     setLoading(true);
 
-    let query = supabase
-      .from("influencers")
-      .select("*", { count: "exact" });
+    let query = supabase.from("influencers").select("*", { count: "exact" });
 
-    if (platformFilter !== "all") {
-      query = query.eq("platform", platformFilter);
-    }
-
+    query = query.eq("platform", platformFilter);
     if (searchQuery) {
+      const escaped = escapeLike(searchQuery);
       query = query.or(
-        `username.ilike.%${searchQuery}%,display_name.ilike.%${searchQuery}%,email.ilike.%${searchQuery}%`
+        `username.ilike.%${escaped}%,display_name.ilike.%${escaped}%,email.ilike.%${escaped}%`
       );
     }
-
-    if (emailFilter === "has") {
-      query = query.not("email", "is", null);
-    } else if (emailFilter === "none") {
-      query = query.is("email", null);
-    }
-
-    if (followerMin) {
-      query = query.gte("follower_count", parseInt(followerMin));
-    }
-    if (followerMax) {
-      query = query.lte("follower_count", parseInt(followerMax));
-    }
-
-    if (countryFilter) {
-      query = query.eq("country", countryFilter.toUpperCase());
-    }
+    if (emailFilter === "has") query = query.not("email", "is", null);
+    else if (emailFilter === "none") query = query.is("email", null);
+    if (followerMin) query = query.gte("follower_count", parseInt(followerMin));
+    if (followerMax) query = query.lte("follower_count", parseInt(followerMax));
+    if (countryFilter) query = query.eq("country", countryFilter.toUpperCase());
+    if (verifiedFilter === "yes") query = query.eq("is_verified", true);
+    if (businessFilter === "yes") query = query.eq("is_business", true);
+    if (categoryFilter) query = query.ilike("category", `%${escapeLike(categoryFilter)}%`);
+    if (importSourceFilter) query = query.ilike("import_source", `%${escapeLike(importSourceFilter)}%`);
+    if (enrichedFilter === "enriched") query = query.not("bio", "is", null);
+    else if (enrichedFilter === "unenriched") query = query.is("bio", null);
 
     query = query
-      .order("follower_count", { ascending: false })
+      .order(sortField, { ascending: false, nullsFirst: false })
       .range(page * pageSize, (page + 1) * pageSize - 1);
 
     const { data, error, count } = await query;
@@ -173,20 +1533,24 @@ export default function MasterPage() {
   }
 
   function formatCount(n: number | null) {
-    if (n === null) return "-";
+    if (n === null || n === undefined) return "-";
     if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
     if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
     return n.toString();
   }
 
+  function formatEngagement(rate: number | string | null) {
+    if (rate === null) return null;
+    const n = Number(rate);
+    if (isNaN(n)) return null;
+    return `${(n * 100).toFixed(1)}%`;
+  }
+
   // Selection handlers
   const handleSelectAll = useCallback(
     (checked: boolean) => {
-      if (checked) {
-        setSelectedIds(new Set(influencers.map((inf) => inf.id)));
-      } else {
-        setSelectedIds(new Set());
-      }
+      if (checked) setSelectedIds(new Set(influencers.map((inf) => inf.id)));
+      else setSelectedIds(new Set());
     },
     [influencers]
   );
@@ -194,11 +1558,8 @@ export default function MasterPage() {
   const handleSelectOne = useCallback((id: string, checked: boolean) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      if (checked) {
-        next.add(id);
-      } else {
-        next.delete(id);
-      }
+      if (checked) next.add(id);
+      else next.delete(id);
       return next;
     });
   }, []);
@@ -206,19 +1567,11 @@ export default function MasterPage() {
   const allSelected = influencers.length > 0 && influencers.every((inf) => selectedIds.has(inf.id));
   const someSelected = selectedIds.size > 0 && !allSelected;
 
-  // Campaign assignment handler
   async function handleAssignToCampaign() {
-    if (!selectedCampaignId) {
-      toast.error("캠페인을 선택해주세요.");
-      return;
-    }
-    if (selectedIds.size === 0) {
-      toast.error("인플루언서를 선택해주세요.");
-      return;
-    }
+    if (!selectedCampaignId) { toast.error("캠페인을 선택해주세요."); return; }
+    if (selectedIds.size === 0) { toast.error("인플루언서를 선택해주세요."); return; }
 
     setAssigning(true);
-
     const rows = Array.from(selectedIds).map((influencer_id) => ({
       campaign_id: selectedCampaignId,
       influencer_id,
@@ -236,299 +1589,1397 @@ export default function MasterPage() {
       toast.success(`${selectedIds.size}명을 "${campaignName}" 캠페인에 배정했습니다.`);
       setSelectedIds(new Set());
       setSelectedCampaignId("");
-      // Refresh assignments
       fetchCampaignAssignments(influencers.map((inf) => inf.id));
     }
-
     setAssigning(false);
   }
 
+  async function fetchEnrichStats() {
+    try {
+      const res = await fetch("/api/import/enrich-batch");
+      if (res.ok) {
+        const data = await res.json();
+        setEnrichStats(data);
+      }
+    } catch {
+      // silent fail
+    }
+  }
+
+  async function handleStartEnrichment(priority: "high" | "all") {
+    setEnriching(true);
+    try {
+      const res = await fetch("/api/import/enrich-batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          min_followers: priority === "high" ? 10000 : 0,
+          priority,
+        }),
+      });
+      const result = await res.json();
+
+      if (!res.ok) {
+        toast.error(`보강 실패: ${result.error}`);
+        return;
+      }
+
+      if (result.remaining === 0 && result.count === undefined) {
+        toast.info(result.message);
+        return;
+      }
+
+      toast.success(`${result.count}명 프로필 보강 시작! (남은: ${result.remaining?.toLocaleString() ?? "?"}명)`);
+      fetchEnrichStats();
+    } catch (err) {
+      toast.error("보강 요청 실패");
+    } finally {
+      setEnriching(false);
+    }
+  }
+
+  async function handleExcelImport(file: File) {
+    setImporting(true);
+    setImportProgress("파일 업로드 중...");
+    setImportResult(null);
+
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      setImportProgress("엑셀 파싱 및 임포트 진행 중...");
+
+      const res = await fetch("/api/import/excel", {
+        method: "POST",
+        body: formData,
+      });
+
+      const result = await res.json();
+
+      if (!res.ok) {
+        toast.error(`임포트 실패: ${result.error}`);
+        setImportProgress("");
+        return;
+      }
+
+      setImportResult(result.stats);
+      setImportProgress("완료!");
+      toast.success(`${result.stats.upserted.toLocaleString()}명 임포트 완료!`);
+
+      // Refresh data
+      fetchInfluencers();
+      fetchPlatformCounts();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "알 수 없는 오류";
+      toast.error(`임포트 실패: ${msg}`);
+      setImportProgress("");
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  // CSV functions
+  function handleCsvTemplateDownload() {
+    const plat = platformFilter;
+    window.open(`/api/csv/template?platform=${plat}`, "_blank");
+  }
+
+  async function handleCsvImport(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setCsvImporting(true);
+    try {
+      const plat = platformFilter;
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("platform", plat);
+      const response = await fetch("/api/csv/import", { method: "POST", body: formData });
+      const result = await response.json();
+      if (response.ok) {
+        toast.success(`CSV 가져오기 완료: ${result.upserted}건 ${result.errors > 0 ? `(오류 ${result.errors}건)` : ""}`);
+        fetchInfluencers();
+        fetchPlatformCounts();
+      } else {
+        toast.error("CSV 가져오기 실패: " + result.error);
+      }
+    } catch {
+      toast.error("CSV 가져오기 중 오류가 발생했습니다.");
+    } finally {
+      setCsvImporting(false);
+      if (csvFileRef.current) csvFileRef.current.value = "";
+    }
+  }
+
+  async function handleCsvExport() {
+    setCsvExporting(true);
+    try {
+      const params = new URLSearchParams();
+      params.set("platform", platformFilter);
+      if (searchQuery) params.set("search", searchQuery);
+      if (emailFilter !== "all") params.set("email", emailFilter);
+      if (countryFilter) params.set("country", countryFilter);
+      if (verifiedFilter !== "all") params.set("verified", verifiedFilter);
+      if (followerMin) params.set("follower_min", followerMin);
+      if (followerMax) params.set("follower_max", followerMax);
+      window.open(`/api/csv/export?${params.toString()}`, "_blank");
+    } finally {
+      setCsvExporting(false);
+    }
+  }
+
   const totalPages = Math.ceil(total / pageSize);
+  const totalAll = Object.values(platformCounts).reduce((a, b) => a + b, 0);
+
+  const columns = getColumnsForPlatform(platformFilter);
+  const helpers: RenderHelpers = { formatCount, formatEngagement, getProfileUrl, getRawField };
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-2xl font-bold">마스터 데이터</h1>
-      <p className="text-muted-foreground">모든 캠페인에서 추출된 인플루언서 통합 데이터</p>
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold">마스터 데이터</h1>
+          <p className="text-sm text-muted-foreground mt-1">모든 캠페인에서 추출된 인플루언서 통합 데이터</p>
+        </div>
+        <div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".xlsx,.xls"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) handleExcelImport(f);
+              e.target.value = "";
+            }}
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={importing}
+          >
+            {importing ? (
+              <Loader2 className="w-4 h-4 mr-1.5 animate-spin" />
+            ) : (
+              <FileSpreadsheet className="w-4 h-4 mr-1.5" />
+            )}
+            {importing ? importProgress : "엑셀 임포트"}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => { setShowEnrichPanel(!showEnrichPanel); if (!enrichStats) fetchEnrichStats(); }}
+            className="ml-2"
+          >
+            <TrendingUp className="w-4 h-4 mr-1.5" />
+            프로필 보강
+          </Button>
+          <div className="border-l mx-2 h-6" />
+          <Button variant="outline" size="sm" onClick={handleCsvTemplateDownload}>
+            <FileSpreadsheet className="w-4 h-4 mr-1.5" />
+            CSV 템플릿
+          </Button>
+          <input
+            ref={csvFileRef}
+            type="file"
+            accept=".csv"
+            className="hidden"
+            onChange={handleCsvImport}
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => csvFileRef.current?.click()}
+            disabled={csvImporting}
+          >
+            {csvImporting ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Upload className="w-4 h-4 mr-1.5" />}
+            CSV 가져오기
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleCsvExport}
+            disabled={csvExporting}
+          >
+            {csvExporting ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <FileSpreadsheet className="w-4 h-4 mr-1.5" />}
+            CSV 내보내기
+          </Button>
+        </div>
+      </div>
 
-      <div className="flex gap-3">
-        <div className="relative flex-1">
+      {/* Import Result */}
+      {importResult && (
+        <Card className="border-green-200 bg-green-50/50 dark:border-green-900 dark:bg-green-950/30">
+          <CardContent className="p-4">
+            <div className="flex items-start justify-between">
+              <div>
+                <h3 className="font-semibold text-green-800 dark:text-green-200 flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4" />
+                  엑셀 임포트 완료
+                </h3>
+                <div className="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+                  <div>
+                    <span className="text-muted-foreground">전체 파싱</span>
+                    <p className="font-bold">{importResult.total_parsed.toLocaleString()}명</p>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">중복 제거</span>
+                    <p className="font-bold">{importResult.duplicates_removed.toLocaleString()}명</p>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">임포트</span>
+                    <p className="font-bold text-green-700 dark:text-green-300">{importResult.upserted.toLocaleString()}명</p>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">오류</span>
+                    <p className="font-bold">{importResult.errors.toLocaleString()}</p>
+                  </div>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {importResult.sheets.map((s) => (
+                    <Badge key={s.sheet} variant="secondary" className="text-xs">
+                      {s.sheet} ({s.country}): {s.rows.toLocaleString()}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setImportResult(null)}
+                className="text-muted-foreground"
+              >
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Enrichment Dashboard Panel */}
+      {showEnrichPanel && (
+        <Card className="border-blue-200 dark:border-blue-900">
+          <CardContent className="p-4">
+            <div className="flex items-start justify-between mb-3">
+              <h3 className="font-semibold flex items-center gap-2">
+                <TrendingUp className="w-4 h-4" />
+                프로필 보강 대시보드
+              </h3>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={fetchEnrichStats}
+                  className="text-xs"
+                >
+                  새로고침
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => setShowEnrichPanel(false)}>
+                  <X className="w-4 h-4" />
+                </Button>
+              </div>
+            </div>
+            {enrichStats ? (
+              <>
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-sm mb-3">
+                  <div className="bg-muted/50 rounded-lg p-2.5">
+                    <span className="text-muted-foreground text-xs">전체 IG</span>
+                    <p className="font-bold text-lg">{enrichStats.total.toLocaleString()}</p>
+                  </div>
+                  <div className="bg-green-50 dark:bg-green-950/30 rounded-lg p-2.5">
+                    <span className="text-muted-foreground text-xs">보강 완료</span>
+                    <p className="font-bold text-lg text-green-700 dark:text-green-300">{enrichStats.enriched.toLocaleString()}</p>
+                  </div>
+                  <div className="bg-amber-50 dark:bg-amber-950/30 rounded-lg p-2.5">
+                    <span className="text-muted-foreground text-xs">미보강</span>
+                    <p className="font-bold text-lg text-amber-700 dark:text-amber-300">{enrichStats.unenriched.toLocaleString()}</p>
+                  </div>
+                  <div className="bg-purple-50 dark:bg-purple-950/30 rounded-lg p-2.5">
+                    <span className="text-muted-foreground text-xs">10K+ 미보강</span>
+                    <p className="font-bold text-lg text-purple-700 dark:text-purple-300">{enrichStats.high_priority_unenriched.toLocaleString()}</p>
+                  </div>
+                  <div className="bg-blue-50 dark:bg-blue-950/30 rounded-lg p-2.5">
+                    <span className="text-muted-foreground text-xs">이메일 보유</span>
+                    <p className="font-bold text-lg text-blue-700 dark:text-blue-300">{enrichStats.with_email.toLocaleString()}</p>
+                  </div>
+                </div>
+                {/* Progress bar */}
+                <div className="mb-3">
+                  <div className="flex items-center justify-between text-xs text-muted-foreground mb-1">
+                    <span>보강률</span>
+                    <span>{enrichStats.enrichment_rate}%</span>
+                  </div>
+                  <div className="w-full bg-muted rounded-full h-2">
+                    <div
+                      className="bg-green-500 h-2 rounded-full transition-all"
+                      style={{ width: `${enrichStats.enrichment_rate}%` }}
+                    />
+                  </div>
+                </div>
+                {/* Action buttons */}
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    onClick={() => handleStartEnrichment("high")}
+                    disabled={enriching || enrichStats.high_priority_unenriched === 0}
+                  >
+                    {enriching ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <UserCheck className="w-3.5 h-3.5 mr-1.5" />}
+                    10K+ 우선 보강 (200명)
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handleStartEnrichment("all")}
+                    disabled={enriching || enrichStats.unenriched === 0}
+                  >
+                    {enriching ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Users className="w-3.5 h-3.5 mr-1.5" />}
+                    전체 보강 (200명)
+                  </Button>
+                </div>
+                {enrichStats.running_jobs.length > 0 && (
+                  <div className="mt-2 text-xs text-muted-foreground">
+                    {enrichStats.running_jobs.length}개 보강 작업 실행 중
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="w-4 h-4 animate-spin" /> 통계 로딩 중...
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Stats Overview - Platform Pill Buttons */}
+      <div className="flex flex-wrap gap-2">
+        {PLATFORMS.map((p) => (
+          <button
+            key={p.value}
+            onClick={() => { setPlatformFilter(p.value as PlatformFilter); setPage(0); setExpandedId(null); }}
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-sm transition-colors ${
+              platformFilter === p.value ? "border-primary bg-primary/10 text-primary font-medium" : "border-border hover:border-primary/30 text-muted-foreground"
+            }`}
+          >
+            <div className={`w-2 h-2 rounded-full ${PLATFORM_DOT_COLORS[p.value] ?? "bg-gray-400"}`} />
+            {p.label} <span className="font-bold text-foreground">{(platformCounts[p.value] ?? 0).toLocaleString()}</span>
+          </button>
+        ))}
+        <button
+          onClick={() => { setEmailFilter(emailFilter === "has" ? "all" : "has"); setPage(0); }}
+          className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-sm transition-colors ${
+            emailFilter === "has" ? "border-green-500 bg-green-50 text-green-700 font-medium" : "border-border hover:border-green-300 text-muted-foreground"
+          }`}
+        >
+          <Mail className="w-3.5 h-3.5" />
+          이메일 <span className="font-bold text-foreground">{emailCount.toLocaleString()}</span>
+        </button>
+      </div>
+
+      {/* Search + Filters */}
+      <div className="flex gap-2 items-center flex-wrap">
+        <div className="relative flex-1 min-w-[200px] max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
           <Input
             placeholder="이름, 유저네임, 이메일 검색..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-            className="pl-10"
+            className="pl-10 h-9"
           />
         </div>
-        <Select value={platformFilter} onValueChange={(v) => { setPlatformFilter(v); setPage(0); }}>
-          <SelectTrigger className="w-40">
-            <SelectValue placeholder="플랫폼" />
+
+        <Select value={emailFilter} onValueChange={(v) => { setEmailFilter(v); setPage(0); }}>
+          <SelectTrigger className="w-28 h-9">
+            <SelectValue placeholder="이메일" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">전체</SelectItem>
-            {PLATFORMS.map((p) => (
-              <SelectItem key={p.value} value={p.value}>
-                {p.label}
-              </SelectItem>
+            <SelectItem value="all">이메일 전체</SelectItem>
+            <SelectItem value="has">있음</SelectItem>
+            <SelectItem value="none">없음</SelectItem>
+          </SelectContent>
+        </Select>
+
+        <Input
+          placeholder="팔로워 min"
+          value={followerMin}
+          onChange={(e) => setFollowerMin(e.target.value)}
+          className="w-24 h-9"
+          type="number"
+        />
+        <Input
+          placeholder="팔로워 max"
+          value={followerMax}
+          onChange={(e) => setFollowerMax(e.target.value)}
+          className="w-24 h-9"
+          type="number"
+        />
+        <Select value={countryFilter || "all"} onValueChange={(v) => { setCountryFilter(v === "all" ? "" : v); setPage(0); }}>
+          <SelectTrigger className="w-28 h-9">
+            <SelectValue placeholder="국가" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">국가 전체</SelectItem>
+            <SelectItem value="HK">HK 홍콩</SelectItem>
+            <SelectItem value="MY">MY 말레이시아</SelectItem>
+            <SelectItem value="SG">SG 싱가포르</SelectItem>
+            <SelectItem value="TW">TW 대만</SelectItem>
+            <SelectItem value="JP">JP 일본</SelectItem>
+            <SelectItem value="KR">KR 한국</SelectItem>
+            <SelectItem value="US">US 미국</SelectItem>
+            <SelectItem value="GB">GB 영국</SelectItem>
+            <SelectItem value="EN">EN 영미권</SelectItem>
+            <SelectItem value="TH">TH 태국</SelectItem>
+            <SelectItem value="PH">PH 필리핀</SelectItem>
+            <SelectItem value="ID">ID 인도네시아</SelectItem>
+            <SelectItem value="VN">VN 베트남</SelectItem>
+            <SelectItem value="IN">IN 인도</SelectItem>
+            <SelectItem value="AU">AU 호주</SelectItem>
+          </SelectContent>
+        </Select>
+
+        <Select value={verifiedFilter} onValueChange={(v) => { setVerifiedFilter(v); setPage(0); }}>
+          <SelectTrigger className="w-24 h-9">
+            <SelectValue placeholder="인증" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">인증 전체</SelectItem>
+            <SelectItem value="yes">인증만</SelectItem>
+          </SelectContent>
+        </Select>
+
+        <Select value={businessFilter} onValueChange={(v) => { setBusinessFilter(v); setPage(0); }}>
+          <SelectTrigger className="w-28 h-9">
+            <SelectValue placeholder="비즈니스" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">비즈니스 전체</SelectItem>
+            <SelectItem value="yes">비즈니스만</SelectItem>
+          </SelectContent>
+        </Select>
+
+        <Select value={enrichedFilter} onValueChange={(v) => { setEnrichedFilter(v); setPage(0); }}>
+          <SelectTrigger className="w-28 h-9">
+            <SelectValue placeholder="보강상태" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">보강 전체</SelectItem>
+            <SelectItem value="enriched">보강 완료</SelectItem>
+            <SelectItem value="unenriched">미보강</SelectItem>
+          </SelectContent>
+        </Select>
+
+        <Select value={sortField} onValueChange={(v) => { setSortField(v as SortField); setPage(0); }}>
+          <SelectTrigger className="w-28 h-9">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {SORT_OPTIONS.map((opt) => (
+              <SelectItem key={opt.value} value={opt.value}>{opt.label}순</SelectItem>
             ))}
           </SelectContent>
         </Select>
-        <Button variant="outline" onClick={handleSearch}>
-          검색
-        </Button>
-      </div>
 
-      {/* Advanced Filters */}
-      <div className="flex gap-3 flex-wrap items-end">
-        <div>
-          <label className="text-xs text-muted-foreground mb-1 block">이메일</label>
-          <Select value={emailFilter} onValueChange={(v) => { setEmailFilter(v); setPage(0); }}>
-            <SelectTrigger className="w-32">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">전체</SelectItem>
-              <SelectItem value="has">있음</SelectItem>
-              <SelectItem value="none">없음</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <div>
-          <label className="text-xs text-muted-foreground mb-1 block">팔로워 최소</label>
-          <Input
-            placeholder="예: 1000"
-            value={followerMin}
-            onChange={(e) => setFollowerMin(e.target.value)}
-            className="w-28"
-            type="number"
-          />
-        </div>
-        <div>
-          <label className="text-xs text-muted-foreground mb-1 block">팔로워 최대</label>
-          <Input
-            placeholder="예: 100000"
-            value={followerMax}
-            onChange={(e) => setFollowerMax(e.target.value)}
-            className="w-28"
-            type="number"
-          />
-        </div>
-        <div>
-          <label className="text-xs text-muted-foreground mb-1 block">국가</label>
-          <Input
-            placeholder="KR"
-            value={countryFilter}
-            onChange={(e) => setCountryFilter(e.target.value)}
-            className="w-20"
-          />
-        </div>
-        <Button variant="outline" size="sm" onClick={handleSearch}>
-          필터 적용
+        <Button variant="outline" size="sm" onClick={handleSearch} className="h-9">
+          검색
         </Button>
         <Button
           variant="ghost"
           size="sm"
+          className="h-9"
           onClick={() => {
-            setEmailFilter("all");
-            setFollowerMin("");
-            setFollowerMax("");
-            setCountryFilter("");
-            setPlatformFilter("all");
-            setSearchQuery("");
-            setPage(0);
+            setEmailFilter("all"); setFollowerMin(""); setFollowerMax(""); setCountryFilter("");
+            setPlatformFilter("instagram"); setSearchQuery(""); setPage(0); setSortField("follower_count");
+            setVerifiedFilter("all"); setBusinessFilter("all"); setCategoryFilter("");
+            setEnrichedFilter("all"); setImportSourceFilter("");
             fetchInfluencers();
           }}
         >
           초기화
         </Button>
+
+        {/* View mode toggle */}
+        <div className="flex items-center border rounded-md ml-auto">
+          <button
+            onClick={() => setViewMode("card")}
+            className={`flex items-center gap-1 px-2.5 py-1.5 text-sm transition-colors rounded-l-md ${
+              viewMode === "card"
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted"
+            }`}
+            title="카드 뷰"
+          >
+            <LayoutGrid className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => setViewMode("table")}
+            className={`flex items-center gap-1 px-2.5 py-1.5 text-sm transition-colors rounded-r-md ${
+              viewMode === "table"
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted"
+            }`}
+            title="테이블 뷰"
+          >
+            <Table2 className="w-4 h-4" />
+          </button>
+        </div>
       </div>
 
       {/* Selection Action Bar */}
       {selectedIds.size > 0 && (
-        <div className="flex items-center gap-3 p-3 bg-muted/50 border rounded-lg">
-          <Users className="w-4 h-4 text-muted-foreground" />
+        <div className="flex items-center gap-3 p-3 bg-primary/5 border border-primary/20 rounded-lg">
+          <UserCheck className="w-4 h-4 text-primary" />
           <span className="text-sm font-medium">{selectedIds.size}명 선택됨</span>
           <div className="h-4 w-px bg-border" />
           <Select value={selectedCampaignId} onValueChange={setSelectedCampaignId}>
-            <SelectTrigger className="w-64">
+            <SelectTrigger className="w-64 h-9">
               <SelectValue placeholder="캠페인 선택..." />
             </SelectTrigger>
             <SelectContent>
               {campaigns.map((c) => (
-                <SelectItem key={c.id} value={c.id}>
-                  {c.name}
-                </SelectItem>
+                <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
               ))}
             </SelectContent>
           </Select>
-          <Button
-            size="sm"
-            onClick={handleAssignToCampaign}
-            disabled={assigning || !selectedCampaignId}
-          >
+          <Button size="sm" onClick={handleAssignToCampaign} disabled={assigning || !selectedCampaignId}>
             {assigning ? "배정 중..." : "캠페인에 배정"}
           </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => {
-              setSelectedIds(new Set());
-              setSelectedCampaignId("");
-            }}
-          >
+          <Button variant="ghost" size="sm" onClick={() => { setSelectedIds(new Set()); setSelectedCampaignId(""); }}>
             선택 해제
           </Button>
         </div>
       )}
 
+      {/* Count + Pagination */}
       <div className="flex items-center justify-between text-sm text-muted-foreground">
-        <span>총 {total.toLocaleString()}명</span>
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={page === 0}
-            onClick={() => setPage((p) => p - 1)}
-          >
-            이전
-          </Button>
-          <span className="flex items-center px-2">
-            {page + 1} / {totalPages || 1}
-          </span>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={page >= totalPages - 1}
-            onClick={() => setPage((p) => p + 1)}
-          >
-            다음
-          </Button>
+        <div className="flex items-center gap-3">
+          <Checkbox
+            checked={allSelected ? true : someSelected ? "indeterminate" : false}
+            onCheckedChange={(checked) => handleSelectAll(!!checked)}
+            aria-label="전체 선택"
+          />
+          <span>총 <strong className="text-foreground">{total.toLocaleString()}</strong>명</span>
+          {selectedIds.size > 0 && (
+            <span className="text-xs text-primary font-medium ml-2">({selectedIds.size}명 선택)</span>
+          )}
+        </div>
+        <div className="flex gap-1.5 items-center">
+          <Button variant="outline" size="sm" className="h-7 px-2 text-xs" disabled={page === 0} onClick={() => setPage(0)}>처음</Button>
+          <Button variant="outline" size="sm" className="h-7 px-2 text-xs" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>이전</Button>
+          <div className="flex items-center gap-1 px-1">
+            <Input
+              type="number"
+              min={1}
+              max={totalPages || 1}
+              value={page + 1}
+              onChange={(e) => {
+                const val = parseInt(e.target.value);
+                if (!isNaN(val) && val >= 1 && val <= totalPages) setPage(val - 1);
+              }}
+              className="w-14 h-7 text-xs text-center [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+            />
+            <span className="text-xs text-muted-foreground">/ {totalPages || 1}</span>
+          </div>
+          <Button variant="outline" size="sm" className="h-7 px-2 text-xs" disabled={page >= totalPages - 1} onClick={() => setPage((p) => p + 1)}>다음</Button>
+          <Button variant="outline" size="sm" className="h-7 px-2 text-xs" disabled={page >= totalPages - 1} onClick={() => setPage(totalPages - 1)}>마지막</Button>
         </div>
       </div>
 
-      <Card>
-        <CardContent className="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-10">
-                  <Checkbox
-                    checked={allSelected ? true : someSelected ? "indeterminate" : false}
-                    onCheckedChange={(checked) => handleSelectAll(!!checked)}
-                    aria-label="전체 선택"
-                  />
-                </TableHead>
-                <TableHead>프로필</TableHead>
-                <TableHead>유저네임</TableHead>
-                <TableHead>플랫폼</TableHead>
-                <TableHead>팔로워</TableHead>
-                <TableHead>게시물</TableHead>
-                <TableHead>이메일</TableHead>
-                <TableHead>캠페인</TableHead>
-                <TableHead>참여율</TableHead>
-                <TableHead>국가</TableHead>
-                <TableHead className="w-12" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {loading ? (
-                <TableRow>
-                  <TableCell colSpan={11} className="text-center py-8 text-muted-foreground">
-                    로딩 중...
-                  </TableCell>
-                </TableRow>
-              ) : influencers.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={11} className="text-center py-8 text-muted-foreground">
-                    데이터가 없습니다.
-                  </TableCell>
-                </TableRow>
-              ) : (
-                influencers.map((inf) => (
-                  <TableRow
-                    key={inf.id}
-                    className={selectedIds.has(inf.id) ? "bg-muted/40" : ""}
-                  >
-                    <TableCell>
-                      <Checkbox
-                        checked={selectedIds.has(inf.id)}
-                        onCheckedChange={(checked) => handleSelectOne(inf.id, !!checked)}
-                        aria-label={`${inf.username ?? inf.display_name} 선택`}
+      {/* Content Area */}
+      {loading ? (
+        <div className="space-y-1.5">
+          {Array.from({ length: 10 }).map((_, i) => (
+            <div key={i} className="flex items-center gap-3 px-3 py-3 bg-card border rounded-lg animate-pulse">
+              <div className="w-4 h-4 rounded bg-muted" />
+              <div className="w-1.5 h-8 rounded-full bg-muted" />
+              <div className="w-8 h-8 rounded-full bg-muted" />
+              <div className="space-y-1.5 flex-1">
+                <div className="h-3.5 bg-muted rounded w-32" />
+                <div className="h-2.5 bg-muted rounded w-20" />
+              </div>
+              <div className="h-3 bg-muted rounded w-16" />
+              <div className="h-3 bg-muted rounded w-12" />
+              <div className="h-3 bg-muted rounded w-20" />
+            </div>
+          ))}
+        </div>
+      ) : influencers.length === 0 ? (
+        <div className="text-center py-12 text-muted-foreground">데이터가 없습니다.</div>
+      ) : viewMode === "card" ? (
+        /* ================================================================
+         * CARD VIEW - Compact row style for bulk selection
+         * ================================================================ */
+        <div className="space-y-1.5">
+          {influencers.map((inf) => {
+            const contentPosts = getContentPosts(inf);
+            const profileUrl = getProfileUrl(inf);
+            const engagementVal = formatEngagement(inf.engagement_rate);
+            const assignments = campaignAssignments[inf.id] ?? [];
+            const kws = inf.extracted_keywords as string[] | null;
+            const tags = inf.extracted_from_tags as string[] | null;
+            const isExpanded = expandedId === inf.id;
+
+            return (
+              <div
+                key={inf.id}
+                className={`relative bg-card border rounded-lg overflow-hidden transition-all hover:shadow-sm ${
+                  selectedIds.has(inf.id) ? "ring-2 ring-primary/40 bg-primary/[0.02]" : ""
+                }`}
+              >
+                {/* Compact row */}
+                <div className="flex items-center gap-3 px-3 py-2">
+                  {/* Checkbox */}
+                  <div className="flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+                    <Checkbox
+                      checked={selectedIds.has(inf.id)}
+                      onCheckedChange={(checked) => handleSelectOne(inf.id, !!checked)}
+                    />
+                  </div>
+
+                  {/* Platform color dot */}
+                  <div className={`w-1.5 h-8 rounded-full flex-shrink-0 ${
+                    inf.platform === "instagram" ? "bg-gradient-to-b from-purple-500 to-pink-500" :
+                    inf.platform === "tiktok" ? "bg-black dark:bg-white" :
+                    inf.platform === "youtube" ? "bg-red-500" :
+                    inf.platform === "twitter" ? "bg-blue-400" : "bg-gray-400"
+                  }`} />
+
+                  {/* Profile image */}
+                  <a href={profileUrl} target="_blank" rel="noopener noreferrer" className="flex-shrink-0">
+                    {inf.profile_image_url ? (
+                      <img
+                        src={inf.profile_image_url}
+                        alt=""
+                        className="w-9 h-9 rounded-full object-cover ring-1 ring-muted"
+                        referrerPolicy="no-referrer"
+                        loading="lazy"
+                        onError={(e) => {
+                          e.currentTarget.style.display = "none";
+                          e.currentTarget.nextElementSibling?.classList.remove("hidden");
+                        }}
                       />
-                    </TableCell>
-                    <TableCell>
-                      {inf.profile_image_url ? (
-                        <img
-                          src={inf.profile_image_url}
-                          alt=""
-                          className="w-8 h-8 rounded-full object-cover"
+                    ) : null}
+                    <div className={`w-9 h-9 rounded-full bg-muted flex items-center justify-center ${inf.profile_image_url ? "hidden" : ""}`}>
+                      <Users className="w-4 h-4 text-muted-foreground" />
+                    </div>
+                  </a>
+
+                  {/* Username + display name */}
+                  <div className="min-w-0 w-40 flex-shrink-0">
+                    <a
+                      href={profileUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-sm font-semibold hover:text-primary transition-colors truncate block"
+                    >
+                      @{inf.username ?? "-"}
+                    </a>
+                    {inf.display_name && inf.display_name !== inf.username && (
+                      <p className="text-[11px] text-muted-foreground truncate">{inf.display_name}</p>
+                    )}
+                  </div>
+
+                  {/* Stats inline */}
+                  <div className="flex items-center gap-4 flex-shrink-0 text-sm">
+                    <div className="w-16 text-right">
+                      <span className="font-bold">{formatCount(inf.follower_count)}</span>
+                      <span className="text-[10px] text-muted-foreground ml-0.5">팔</span>
+                    </div>
+                    {engagementVal && (
+                      <span className="text-green-600 font-medium w-14 text-right">{engagementVal}</span>
+                    )}
+                    {inf.country && (
+                      <Badge variant="outline" className="text-[10px] px-1.5 py-0">{inf.country}</Badge>
+                    )}
+                  </div>
+
+                  {/* Email */}
+                  <div className="flex-1 min-w-0">
+                    {inf.email ? (
+                      <div className="flex items-center gap-1">
+                        <Mail className="w-3 h-3 text-green-600 flex-shrink-0" />
+                        <span className="text-xs text-green-700 dark:text-green-400 truncate font-medium">{inf.email}</span>
+                      </div>
+                    ) : (
+                      <span className="text-[10px] text-muted-foreground/50">-</span>
+                    )}
+                  </div>
+
+                  {/* Badges */}
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    {inf.is_verified && <CheckCircle2 className="w-3.5 h-3.5 text-blue-500" />}
+                    {inf.is_business && <span className="text-[9px] px-1 py-0 rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">Biz</span>}
+                    {inf.category && (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span className="text-[9px] px-1 py-0 rounded bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400 truncate max-w-[60px]">{inf.category}</span>
+                        </TooltipTrigger>
+                        <TooltipContent>{inf.category}</TooltipContent>
+                      </Tooltip>
+                    )}
+                  </div>
+
+                  {/* Keywords compact */}
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    {kws?.slice(0, 1).map((kw) => (
+                      <span key={kw} className="text-[9px] bg-violet-50 text-violet-700 dark:bg-violet-950 dark:text-violet-300 px-1 rounded">{kw}</span>
+                    ))}
+                    {((kws?.length ?? 0) + (tags?.length ?? 0)) > 1 && (
+                      <span className="text-[9px] text-muted-foreground">+{(kws?.length ?? 0) + (tags?.length ?? 0) - 1}</span>
+                    )}
+                  </div>
+
+                  {/* Expand toggle */}
+                  <button
+                    onClick={() => setExpandedId(isExpanded ? null : inf.id)}
+                    className="flex-shrink-0 p-1 rounded hover:bg-muted transition-colors"
+                  >
+                    {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                  </button>
+                </div>
+
+                {/* Expanded: bio + content grid + campaigns */}
+                {isExpanded && (
+                  <div className="px-3 pb-3 pt-1 border-t bg-muted/20">
+                    {inf.bio && (
+                      <p className="text-xs text-muted-foreground line-clamp-2 mb-2">{inf.bio}</p>
+                    )}
+                    <div className="flex items-center gap-1.5 flex-wrap mb-2">
+                      {assignments.map((c) => (
+                        <Badge key={c.id} variant="secondary" className="text-[10px]">{c.name}</Badge>
+                      ))}
+                      {inf.email_source && (() => {
+                        const badge = getEmailSourceBadge(inf.email_source);
+                        return badge ? <span className={`text-[10px] px-1.5 py-0 rounded ${badge.className}`}>출처: {badge.label}</span> : null;
+                      })()}
+                      {inf.following_count !== null && <span className="text-[10px] text-muted-foreground">팔로잉 {formatCount(inf.following_count)}</span>}
+                      {inf.post_count !== null && <span className="text-[10px] text-muted-foreground">게시물 {formatCount(inf.post_count)}</span>}
+                    </div>
+                    {contentPosts.length > 0 && (
+                      <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-10 gap-1.5">
+                      {contentPosts.slice(0, 12).map((post, idx) => {
+                        const isVideo = post.type?.toLowerCase() === "video" || !!post.videoUrl;
+                        return (
+                          <div
+                            key={idx}
+                            className="group/thumb relative aspect-[4/5] bg-muted rounded-lg overflow-hidden"
+                          >
+                            {/* Video: show <video> with poster, Image: show <img> */}
+                            {isVideo && post.videoUrl ? (
+                              <video
+                                src={post.videoUrl}
+                                poster={post.imageUrl}
+                                className="w-full h-full object-cover"
+                                muted
+                                playsInline
+                                preload="none"
+                                onMouseEnter={(e) => e.currentTarget.play().catch(() => {})}
+                                onMouseLeave={(e) => { e.currentTarget.pause(); e.currentTarget.currentTime = 0; }}
+                                onError={(e) => {
+                                  // Fallback to poster image on video error
+                                  const el = e.currentTarget;
+                                  if (post.imageUrl) {
+                                    const img = document.createElement("img");
+                                    img.src = post.imageUrl;
+                                    img.className = el.className;
+                                    img.loading = "lazy";
+                                    el.replaceWith(img);
+                                  }
+                                }}
+                              />
+                            ) : (
+                              <img
+                                src={post.imageUrl}
+                                alt=""
+                                className="w-full h-full object-cover group-hover/thumb:scale-105 transition-transform duration-300"
+                                loading="lazy"
+                                referrerPolicy="no-referrer"
+                                onError={(e) => {
+                                  // CDN URL expired - show muted background
+                                  e.currentTarget.style.display = "none";
+                                }}
+                              />
+                            )}
+                            {/* Hover overlay with engagement metrics */}
+                            <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent opacity-0 group-hover/thumb:opacity-100 transition-opacity duration-200 flex items-end p-2 pointer-events-none">
+                              <div className="flex items-center gap-2.5 text-white text-xs">
+                                {post.likes !== undefined && (
+                                  <span className="flex items-center gap-1">
+                                    <Heart className="w-3 h-3 fill-current" />{formatCount(post.likes)}
+                                  </span>
+                                )}
+                                {post.comments !== undefined && (
+                                  <span className="flex items-center gap-1">
+                                    <MessageCircle className="w-3 h-3" />{formatCount(post.comments)}
+                                  </span>
+                                )}
+                                {post.views !== undefined && (
+                                  <span className="flex items-center gap-1">
+                                    <Eye className="w-3 h-3" />{formatCount(post.views)}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            {/* Video indicator */}
+                            {isVideo && (
+                              <div className="absolute top-1.5 right-1.5 pointer-events-none">
+                                <div className="bg-black/60 rounded-full p-1">
+                                  <Play className="w-3 h-3 text-white fill-white" />
+                                </div>
+                              </div>
+                            )}
+                            {/* Caption on hover */}
+                            {post.caption && (
+                              <div className="absolute top-0 left-0 right-0 p-2 opacity-0 group-hover/thumb:opacity-100 transition-opacity pointer-events-none">
+                                <p className="text-[10px] text-white line-clamp-2 drop-shadow-lg">{post.caption.slice(0, 80)}</p>
+                              </div>
+                            )}
+                            {/* Click to open modal */}
+                            <button
+                              className="absolute inset-0 z-10 cursor-pointer"
+                              onClick={(e) => { e.stopPropagation(); setModalPost(post); }}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* No content placeholder */}
+                  {contentPosts.length === 0 && (
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground py-4 px-4 bg-muted/30 rounded-lg">
+                      <ImageIcon className="w-4 h-4" />
+                      콘텐츠 데이터 없음 — 프로필 보강 후 표시됩니다
+                    </div>
+                  )}
+                </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        /* ================================================================
+         * TABLE VIEW (existing)
+         * ================================================================ */
+        <Card>
+          <CardContent className="p-0 overflow-x-auto">
+            <Table className="min-w-[1400px] compact-table">
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-10">
+                    <Checkbox
+                      checked={allSelected ? true : someSelected ? "indeterminate" : false}
+                      onCheckedChange={(checked) => handleSelectAll(!!checked)}
+                    />
+                  </TableHead>
+                  {columns.map((col) => (
+                    <TableHead key={col.key} className={col.width ?? ""}>
+                      {col.label}
+                    </TableHead>
+                  ))}
+                  <TableHead className="w-10" />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {influencers.map((inf) => (
+                  <Fragment key={inf.id}>
+                    {/* Main compact row */}
+                    <TableRow
+                      className={`cursor-pointer ${selectedIds.has(inf.id) ? "bg-primary/5" : ""} ${expandedId === inf.id ? "border-b-0 bg-muted/30" : ""}`}
+                      onClick={(e) => {
+                        // Don't toggle expand if clicking checkbox
+                        if ((e.target as HTMLElement).closest('[role="checkbox"]')) return;
+                        if ((e.target as HTMLElement).closest("a")) return;
+                        setExpandedId(expandedId === inf.id ? null : inf.id);
+                      }}
+                    >
+                      <TableCell onClick={(e) => e.stopPropagation()}>
+                        <Checkbox
+                          checked={selectedIds.has(inf.id)}
+                          onCheckedChange={(checked) => handleSelectOne(inf.id, !!checked)}
                         />
-                      ) : (
-                        <div className="w-8 h-8 rounded-full bg-muted" />
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <div className="font-medium">{inf.display_name ?? "-"}</div>
-                      {inf.username && (
-                        <div className="text-xs text-muted-foreground">@{inf.username}</div>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <Badge
-                        variant="outline"
-                        className={PLATFORM_BADGE_COLORS[inf.platform] ?? ""}
-                      >
-                        {PLATFORMS.find((p) => p.value === inf.platform)?.label ?? inf.platform}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="font-medium">{formatCount(inf.follower_count)}</TableCell>
-                    <TableCell>{formatCount(inf.post_count)}</TableCell>
-                    <TableCell>
-                      {inf.email ? (
-                        <div>
-                          <div className="text-sm">{inf.email}</div>
-                          {inf.email_source && (
-                            <div className="text-xs text-muted-foreground">{inf.email_source}</div>
-                          )}
-                        </div>
-                      ) : (
-                        <span className="text-muted-foreground">-</span>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      {campaignAssignments[inf.id]?.length ? (
-                        <div className="flex flex-wrap gap-1">
-                          {campaignAssignments[inf.id].map((c) => (
-                            <Badge key={c.id} variant="secondary" className="text-xs">
-                              {c.name}
-                            </Badge>
-                          ))}
-                        </div>
-                      ) : (
-                        <span className="text-muted-foreground text-xs">-</span>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      {inf.engagement_rate
-                        ? `${(Number(inf.engagement_rate) * 100).toFixed(2)}%`
-                        : "-"}
-                    </TableCell>
-                    <TableCell>{inf.country ?? "-"}</TableCell>
-                    <TableCell>
-                      {inf.profile_url && (
-                        <a href={inf.profile_url} target="_blank" rel="noopener noreferrer">
-                          <ExternalLink className="w-4 h-4 text-muted-foreground hover:text-foreground" />
-                        </a>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))
+                      </TableCell>
+                      {columns.map((col) => (
+                        <TableCell key={col.key}>
+                          {col.render(inf, helpers)}
+                        </TableCell>
+                      ))}
+                      <TableCell>
+                        {expandedId === inf.id ? (
+                          <ChevronUp className="w-4 h-4 text-muted-foreground" />
+                        ) : (
+                          <ChevronDown className="w-4 h-4 text-muted-foreground" />
+                        )}
+                      </TableCell>
+                    </TableRow>
+
+                    {/* Expanded detail row */}
+                    {expandedId === inf.id && (
+                      <TableRow className="bg-muted/20 hover:bg-muted/20">
+                        <TableCell colSpan={columns.length + 2} className="p-0">
+                          <ExpandedDetail
+                            inf={inf}
+                            links={influencerLinks[inf.id] ?? []}
+                            assignments={campaignAssignments[inf.id] ?? []}
+                            formatCount={formatCount}
+                            onOpenModal={setModalPost}
+                          />
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </Fragment>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Bottom pagination */}
+      {!loading && influencers.length > 0 && (
+        <div className="flex justify-center gap-2 pb-4">
+          <Button variant="outline" size="sm" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>이전</Button>
+          <span className="flex items-center px-3 text-sm text-muted-foreground">{page + 1} / {totalPages || 1}</span>
+          <Button variant="outline" size="sm" disabled={page >= totalPages - 1} onClick={() => setPage((p) => p + 1)}>다음</Button>
+        </div>
+      )}
+
+      {/* Mobile-style Video/Image Modal */}
+      {modalPost && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4"
+          onClick={() => setModalPost(null)}
+        >
+          <div
+            className="relative bg-black rounded-3xl overflow-hidden shadow-2xl max-w-[380px] w-full"
+            style={{ maxHeight: "85vh" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Phone-style top bar */}
+            <div className="absolute top-0 left-0 right-0 z-20 flex items-center justify-between px-4 py-3 bg-gradient-to-b from-black/60 to-transparent">
+              <span className="text-white text-sm font-medium truncate max-w-[200px]">
+                {modalPost.caption?.slice(0, 40) || "콘텐츠"}
+              </span>
+              <button
+                onClick={() => setModalPost(null)}
+                className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center hover:bg-white/30 transition-colors"
+              >
+                <X className="w-4 h-4 text-white" />
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="aspect-[9/16] bg-black flex items-center justify-center">
+              {(modalPost.type?.toLowerCase() === "video" || modalPost.videoUrl) && modalPost.videoUrl ? (
+                <video
+                  src={modalPost.videoUrl}
+                  poster={modalPost.imageUrl}
+                  className="w-full h-full object-contain"
+                  controls
+                  autoPlay
+                  playsInline
+                  onError={(e) => {
+                    // Fallback to image on video error
+                    const el = e.currentTarget;
+                    if (modalPost.imageUrl) {
+                      const img = document.createElement("img");
+                      img.src = modalPost.imageUrl;
+                      img.className = "w-full h-full object-contain";
+                      el.replaceWith(img);
+                    }
+                  }}
+                />
+              ) : modalPost.imageUrl ? (
+                <img
+                  src={modalPost.imageUrl}
+                  alt=""
+                  className="w-full h-full object-contain"
+                />
+              ) : (
+                <div className="text-white/50 text-sm">미리보기 없음</div>
               )}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+            </div>
+
+            {/* Bottom metrics bar */}
+            <div className="absolute bottom-0 left-0 right-0 z-20 px-4 py-3 bg-gradient-to-t from-black/80 to-transparent">
+              <div className="flex items-center gap-4 text-white text-sm">
+                {modalPost.likes !== undefined && (
+                  <span className="flex items-center gap-1.5">
+                    <Heart className="w-4 h-4 fill-current" />{formatCount(modalPost.likes)}
+                  </span>
+                )}
+                {modalPost.comments !== undefined && (
+                  <span className="flex items-center gap-1.5">
+                    <MessageCircle className="w-4 h-4" />{formatCount(modalPost.comments)}
+                  </span>
+                )}
+                {modalPost.views !== undefined && (
+                  <span className="flex items-center gap-1.5">
+                    <Eye className="w-4 h-4" />{formatCount(modalPost.views)}
+                  </span>
+                )}
+                {modalPost.url && (
+                  <a
+                    href={modalPost.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="ml-auto flex items-center gap-1 text-white/80 hover:text-white transition-colors"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    <span className="text-xs">원본</span>
+                  </a>
+                )}
+              </div>
+              {modalPost.caption && (
+                <p className="text-white/80 text-xs mt-2 line-clamp-3 leading-relaxed">{modalPost.caption}</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Expanded Detail Component
+// ---------------------------------------------------------------------------
+
+function ExpandedDetail({
+  inf,
+  links,
+  assignments,
+  formatCount,
+  onOpenModal,
+}: {
+  inf: Influencer;
+  links: InfluencerLink[];
+  assignments: { id: string; name: string }[];
+  formatCount: (n: number | null) => string;
+  onOpenModal?: (post: ContentPost) => void;
+}) {
+  const [copiedEmail, setCopiedEmail] = useState(false);
+  const contentPosts = getContentPosts(inf);
+  const raw = inf.raw_data as Record<string, unknown> | null;
+  const profileUrl = getProfileUrl(inf);
+
+  const handleCopyEmail = () => {
+    if (inf.email) {
+      navigator.clipboard.writeText(inf.email);
+      setCopiedEmail(true);
+      setTimeout(() => setCopiedEmail(false), 2000);
+    }
+  };
+
+  return (
+    <div className="px-6 py-5 space-y-5 border-t border-dashed border-border/50">
+      {/* Top section: Profile + Info + Stats */}
+      <div className="flex gap-6">
+        {/* Profile image */}
+        <div className="flex-shrink-0">
+          {inf.profile_image_url ? (
+            <img
+              src={inf.profile_image_url}
+              alt=""
+              className="w-20 h-20 rounded-full object-cover ring-2 ring-muted"
+              referrerPolicy="no-referrer"
+              loading="lazy"
+              onError={(e) => {
+                e.currentTarget.style.display = "none";
+                e.currentTarget.nextElementSibling?.classList.remove("hidden");
+              }}
+            />
+          ) : null}
+          <div className={`w-20 h-20 rounded-full bg-muted flex items-center justify-center ${inf.profile_image_url ? "hidden" : ""}`}>
+            <Users className="w-8 h-8 text-muted-foreground" />
+          </div>
+        </div>
+
+        {/* Info */}
+        <div className="flex-1 min-w-0 space-y-2">
+          <div className="flex items-center gap-3">
+            <h3 className="text-lg font-semibold">{inf.display_name ?? inf.username ?? "-"}</h3>
+            <Badge
+              variant="outline"
+              className={`text-xs ${PLATFORM_BADGE_COLORS[inf.platform] ?? ""}`}
+            >
+              {PLATFORMS.find((p) => p.value === inf.platform)?.label ?? inf.platform}
+            </Badge>
+            <a
+              href={profileUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-sm text-primary hover:underline flex items-center gap-1"
+            >
+              @{inf.username} <ExternalLink className="w-3 h-3" />
+            </a>
+          </div>
+
+          {/* Metrics row */}
+          <div className="flex flex-wrap gap-4 text-sm">
+            {inf.follower_count !== null && (
+              <div className="flex items-center gap-1.5">
+                <Users className="w-3.5 h-3.5 text-blue-500" />
+                <span className="font-medium">{formatCount(inf.follower_count)}</span>
+                <span className="text-muted-foreground text-xs">팔로워</span>
+              </div>
+            )}
+            {inf.following_count !== null && (
+              <div className="flex items-center gap-1.5">
+                <span className="font-medium">{formatCount(inf.following_count)}</span>
+                <span className="text-muted-foreground text-xs">팔로잉</span>
+              </div>
+            )}
+            {inf.post_count !== null && (
+              <div className="flex items-center gap-1.5">
+                <span className="font-medium">{formatCount(inf.post_count)}</span>
+                <span className="text-muted-foreground text-xs">게시물</span>
+              </div>
+            )}
+            {inf.engagement_rate !== null && (
+              <div className="flex items-center gap-1.5">
+                <TrendingUp className="w-3.5 h-3.5 text-green-500" />
+                <span className="font-medium text-green-600">{(Number(inf.engagement_rate) * 100).toFixed(1)}%</span>
+                <span className="text-muted-foreground text-xs">참여율</span>
+              </div>
+            )}
+            {inf.country && (
+              <div className="flex items-center gap-1.5">
+                <Globe className="w-3.5 h-3.5 text-muted-foreground" />
+                <span>{inf.country}</span>
+              </div>
+            )}
+            {inf.language && (
+              <div className="flex items-center gap-1.5">
+                <span className="text-muted-foreground text-xs">언어:</span>
+                <span>{inf.language}</span>
+              </div>
+            )}
+          </div>
+
+          {/* Email */}
+          {inf.email && (
+            <div className="flex items-center gap-2">
+              <Mail className="w-3.5 h-3.5 text-green-500" />
+              <span className="text-sm">{inf.email}</span>
+              {inf.email_source && (() => {
+                const badge = getEmailSourceBadge(inf.email_source);
+                return badge ? (
+                  <span className={`text-[10px] px-1.5 py-0 rounded ${badge.className}`}>{badge.label}</span>
+                ) : null;
+              })()}
+              <button
+                onClick={handleCopyEmail}
+                className="p-1 rounded hover:bg-muted transition-colors"
+                title="이메일 복사"
+              >
+                {copiedEmail ? (
+                  <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />
+                ) : (
+                  <Copy className="w-3.5 h-3.5 text-muted-foreground" />
+                )}
+              </button>
+            </div>
+          )}
+
+          {/* Bio */}
+          {inf.bio && (
+            <div className="text-sm text-muted-foreground leading-relaxed max-w-2xl whitespace-pre-wrap">
+              {inf.bio}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Keywords & Tags */}
+      {((inf.extracted_keywords as string[] | null)?.length || (inf.extracted_from_tags as string[] | null)?.length) ? (
+        <div className="flex flex-wrap gap-1.5">
+          {(inf.extracted_keywords as string[] | null)?.map((kw) => (
+            <span key={kw} className="inline-flex items-center gap-0.5 text-xs bg-violet-50 text-violet-700 px-2 py-0.5 rounded-full">
+              <Hash className="w-3 h-3" />{kw}
+            </span>
+          ))}
+          {(inf.extracted_from_tags as string[] | null)?.map((tag) => (
+            <span key={tag} className="inline-flex items-center gap-0.5 text-xs bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full">
+              <Tag className="w-3 h-3" />{tag}
+            </span>
+          ))}
+        </div>
+      ) : null}
+
+      {/* Campaign Assignments */}
+      {assignments.length > 0 && (
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">배정된 캠페인:</span>
+          {assignments.map((c) => (
+            <Badge key={c.id} variant="secondary" className="text-xs">{c.name}</Badge>
+          ))}
+        </div>
+      )}
+
+      {/* Links */}
+      {links.length > 0 && (
+        <div className="space-y-1.5">
+          <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">바이오 링크</h4>
+          <div className="flex flex-wrap gap-2">
+            {links.map((link) => {
+              let hostname = "";
+              try { hostname = new URL(link.url).hostname.replace("www.", ""); } catch { hostname = link.url; }
+              return (
+                <a
+                  key={link.id}
+                  href={link.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 px-2.5 py-1 rounded-full transition-colors"
+                  title={link.url}
+                >
+                  <Link2 className="w-3 h-3" />
+                  {hostname}
+                  {link.scraped && link.emails_found?.length ? (
+                    <Mail className="w-3 h-3 text-green-500" />
+                  ) : link.scraped ? (
+                    <X className="w-3 h-3 text-red-400" />
+                  ) : null}
+                </a>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Content Preview Grid - with video playback */}
+      <div className="space-y-2">
+        <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+          콘텐츠 미리보기 ({contentPosts.length}개)
+        </h4>
+        {contentPosts.length > 0 ? (
+          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">
+            {contentPosts.map((post, idx) => {
+              const isVid = post.type?.toLowerCase() === "video" || !!post.videoUrl;
+              return (
+                <div
+                  key={idx}
+                  className="group/thumb relative aspect-square bg-muted rounded-lg overflow-hidden"
+                >
+                  {isVid && post.videoUrl ? (
+                    <video
+                      src={post.videoUrl}
+                      poster={post.imageUrl}
+                      className="w-full h-full object-cover"
+                      muted
+                      playsInline
+                      preload="none"
+                      onMouseEnter={(e) => e.currentTarget.play().catch(() => {})}
+                      onMouseLeave={(e) => { e.currentTarget.pause(); e.currentTarget.currentTime = 0; }}
+                      onError={(e) => {
+                        const el = e.currentTarget;
+                        if (post.imageUrl) {
+                          const img = document.createElement("img");
+                          img.src = post.imageUrl;
+                          img.className = el.className;
+                          img.loading = "lazy";
+                          el.replaceWith(img);
+                        }
+                      }}
+                    />
+                  ) : (
+                    <img
+                      src={post.imageUrl}
+                      alt=""
+                      className="w-full h-full object-cover group-hover/thumb:scale-105 transition-transform duration-200"
+                      loading="lazy"
+                      referrerPolicy="no-referrer"
+                      onError={(e) => {
+                        e.currentTarget.style.display = "none";
+                      }}
+                    />
+                  )}
+                  {/* Overlay with metrics */}
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover/thumb:opacity-100 transition-opacity flex items-end p-1.5 pointer-events-none">
+                    <div className="flex items-center gap-2 text-white text-xs">
+                      {post.likes !== undefined && (
+                        <span className="flex items-center gap-0.5">
+                          <Heart className="w-3 h-3 fill-current" />{formatCount(post.likes)}
+                        </span>
+                      )}
+                      {post.comments !== undefined && (
+                        <span className="flex items-center gap-0.5">
+                          <MessageCircle className="w-3 h-3" />{formatCount(post.comments)}
+                        </span>
+                      )}
+                      {post.views !== undefined && (
+                        <span className="flex items-center gap-0.5">
+                          <Eye className="w-3 h-3" />{formatCount(post.views)}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  {/* Video indicator */}
+                  {isVid && (
+                    <div className="absolute top-1 right-1 pointer-events-none">
+                      <div className="bg-black/60 rounded-full p-0.5">
+                        <Play className="w-3 h-3 text-white fill-white" />
+                      </div>
+                    </div>
+                  )}
+                  {/* Click to open modal */}
+                  <button
+                    className="absolute inset-0 z-10 cursor-pointer"
+                    onClick={(e) => { e.stopPropagation(); onOpenModal?.(post); }}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground py-3 px-4 bg-muted/30 rounded-lg">
+            <ImageIcon className="w-4 h-4" />
+            콘텐츠 데이터가 없습니다. 추출을 다시 실행해주세요.
+          </div>
+        )}
+      </div>
+
+      {/* Raw data preview (collapsed by default) */}
+      {raw && <RawDataPreview raw={raw} />}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Raw Data Preview (toggle)
+// ---------------------------------------------------------------------------
+
+function RawDataPreview({ raw }: { raw: Record<string, unknown> }) {
+  const [showRaw, setShowRaw] = useState(false);
+
+  // Pick some interesting fields to show
+  const previewKeys = Object.keys(raw).filter(
+    (k) => !["latestPosts", "posts", "media"].includes(k)
+  ).slice(0, 20);
+
+  return (
+    <div className="space-y-2">
+      <button
+        onClick={() => setShowRaw(!showRaw)}
+        className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wider hover:text-foreground transition-colors"
+      >
+        {showRaw ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+        원본 데이터 (raw_data)
+      </button>
+      {showRaw && (
+        <div className="bg-muted/50 rounded-lg p-4 overflow-x-auto max-h-[400px] overflow-y-auto">
+          <pre className="text-xs text-muted-foreground whitespace-pre-wrap break-all">
+            {JSON.stringify(
+              Object.fromEntries(previewKeys.map((k) => [k, raw[k]])),
+              null,
+              2
+            )}
+          </pre>
+        </div>
+      )}
     </div>
   );
 }

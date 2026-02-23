@@ -1,0 +1,1 @@
+ALTER TABLE keywords ADD COLUMN IF NOT EXISTS target_country TEXT DEFAULT 'ALL';

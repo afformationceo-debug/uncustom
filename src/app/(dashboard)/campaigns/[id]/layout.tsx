@@ -1,7 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
-import { CampaignNav } from "@/components/campaigns/campaign-nav";
 import { notFound } from "next/navigation";
 import type { Tables } from "@/types/database";
+import { Badge } from "@/components/ui/badge";
 
 type Campaign = Tables<"campaigns">;
 
@@ -29,13 +29,13 @@ export default async function CampaignLayout({
 
   return (
     <div className="space-y-4">
-      <div>
+      <div className="flex items-center gap-3">
         <h1 className="text-2xl font-bold">{campaign.name}</h1>
-        {campaign.description && (
-          <p className="text-muted-foreground mt-1">{campaign.description}</p>
-        )}
+        <Badge variant="secondary">{campaign.status}</Badge>
       </div>
-      <CampaignNav campaignId={id} />
+      {campaign.description && (
+        <p className="text-muted-foreground">{campaign.description}</p>
+      )}
       <div>{children}</div>
     </div>
   );

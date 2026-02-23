@@ -1,11 +1,25 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { getRunStatus, getDatasetItems } from "@/lib/apify/client";
+import { getRunStatus, getDatasetItems, startActor } from "@/lib/apify/client";
 import { transformApifyItem } from "@/lib/apify/transform";
-import { extractLinksFromBio } from "@/lib/utils/email-extractor";
+import { extractLinksFromBio, isEmailExtractableLink } from "@/lib/utils/email-extractor";
+import { APIFY_ACTORS } from "@/lib/apify/actors";
 import type { Json, Tables } from "@/types/database";
 
 type ExtractionJob = Tables<"extraction_jobs">;
+
+/** Normalize URL for matching: lowercase, remove trailing slash, www, query params, enforce https */
+function normalizeUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    u.protocol = "https:";
+    const host = u.hostname.replace(/^www\./, "");
+    const path = u.pathname.replace(/\/+$/, "");
+    return `https://${host}${path}`.toLowerCase();
+  } catch {
+    return url.replace(/\/+$/, "").replace(/^http:/, "https:").replace(/\?.*$/, "").toLowerCase();
+  }
+}
 
 export async function GET(request: Request) {
   try {
@@ -30,6 +44,48 @@ export async function GET(request: Request) {
     }
 
     if (!job.apify_run_id) {
+      // For email_social jobs mid-chain: skip failed user and start next
+      if (job.type === "email_social" && job.status === "running") {
+        const inputConfig = job.input_config as Record<string, unknown> | null;
+        const allItems = (inputConfig?.items ?? []) as { platform: string; user_id: string }[];
+        const currentIndex = (inputConfig?.current_index ?? 0) as number;
+        const nextIndex = currentIndex + 1;
+
+        if (nextIndex < allItems.length) {
+          const nextItem = allItems[nextIndex];
+          try {
+            const run = await startActor(APIFY_ACTORS.SOCIAL_EMAIL_SCRAPER, {
+              platform: nextItem.platform,
+              username: nextItem.user_id,
+            });
+            await supabase
+              .from("extraction_jobs")
+              .update({
+                apify_run_id: run.id,
+                input_config: { ...inputConfig, current_index: nextIndex } as unknown as Json,
+              })
+              .eq("id", jobId);
+            return NextResponse.json({ status: "running", total_extracted: job.total_extracted });
+          } catch {
+            // Skip again
+            await supabase
+              .from("extraction_jobs")
+              .update({
+                apify_run_id: null,
+                input_config: { ...inputConfig, current_index: nextIndex } as unknown as Json,
+              })
+              .eq("id", jobId);
+            return NextResponse.json({ status: "running", total_extracted: job.total_extracted });
+          }
+        } else {
+          // All items processed
+          await supabase
+            .from("extraction_jobs")
+            .update({ status: "completed", completed_at: new Date().toISOString() })
+            .eq("id", jobId);
+          return NextResponse.json({ status: "completed", total_extracted: job.total_extracted, new_extracted: job.new_extracted });
+        }
+      }
       return NextResponse.json({ status: job.status, total_extracted: 0 });
     }
 
@@ -44,215 +100,63 @@ export async function GET(request: Request) {
       // Fetch results and save
       const items = await getDatasetItems(run.defaultDatasetId);
 
-      // Look up source keyword/tag for extracted_keywords field
-      let sourceKeyword: string | null = null;
-      if (job.type === "keyword" && job.source_id) {
-        const { data: kwData } = await supabase
-          .from("keywords")
-          .select("keyword")
-          .eq("id", job.source_id)
-          .single();
-        sourceKeyword = kwData?.keyword ?? null;
-      } else if (job.type === "tagged" && job.source_id) {
-        const { data: tagData } = await supabase
-          .from("tagged_accounts")
-          .select("account_username")
-          .eq("id", job.source_id)
-          .single();
-        sourceKeyword = tagData?.account_username ? `@${tagData.account_username}` : null;
+      // Route to enrichment handler if this is an enrich job
+      if (job.type === "enrich") {
+        return handleEnrichmentResults(supabase, job, items, jobId);
       }
 
-      let newCount = 0;
-      // Track processed platform_ids to avoid duplicate processing
-      // (e.g., IG reel scraper returns multiple reels per user)
-      const processedIds = new Set<string>();
+      // Route to email_scrape handler if this is a batch email scrape job
+      if (job.type === "email_scrape") {
+        return handleEmailScrapeResults(supabase, job, items, jobId);
+      }
 
-      for (const item of items) {
-        const record = item as Record<string, unknown>;
-        const transformed = transformApifyItem(record, job.platform);
-        if (!transformed || !transformed.platform_id) continue;
+      // Route to social email scraper results (cross-platform email lookup)
+      if (job.type === "email_social") {
+        return handleSocialEmailResults(supabase, job, items, jobId);
+      }
 
-        // Skip if we already processed this platform_id in this batch
-        const dedupeKey = `${transformed.platform}:${transformed.platform_id}`;
-        if (processedIds.has(dedupeKey)) continue;
-        processedIds.add(dedupeKey);
+      // Regular extraction handling (keyword/tagged)
+      return handleExtractionResults(supabase, job, items, jobId);
+    } else if (run.status === "FAILED" || run.status === "ABORTED") {
+      // For email_social chain: skip failed user and continue to next
+      if (job.type === "email_social") {
+        const inputConfig = job.input_config as Record<string, unknown> | null;
+        const allItems = (inputConfig?.items ?? []) as { platform: string; user_id: string }[];
+        const currentIndex = (inputConfig?.current_index ?? 0) as number;
+        const nextIndex = currentIndex + 1;
 
-        const externalUrl = (record.externalUrl ?? record.externalUrlShimmed ?? null) as string | null;
-        const bioLinks = extractLinksFromBio(transformed.bio, externalUrl);
-
-        // Upsert influencer
-        const { data: existing } = await supabase
-          .from("influencers")
-          .select("id")
-          .eq("platform", job.platform)
-          .eq("platform_id", transformed.platform_id)
-          .single();
-
-        if (!existing) {
-          const { data: newInf, error: insertErr } = await supabase
-            .from("influencers")
-            .insert({
-              platform: transformed.platform,
-              platform_id: transformed.platform_id,
-              username: transformed.username,
-              display_name: transformed.display_name,
-              profile_url: transformed.profile_url,
-              profile_image_url: transformed.profile_image_url,
-              bio: transformed.bio,
-              follower_count: transformed.follower_count,
-              following_count: transformed.following_count,
-              post_count: transformed.post_count,
-              engagement_rate: transformed.engagement_rate,
-              email: transformed.email,
-              email_source: transformed.email_source,
-              country: transformed.country,
-              language: transformed.language,
-              raw_data: transformed.raw_data,
-              extracted_keywords: sourceKeyword ? [sourceKeyword] : [],
-            })
-            .select("id")
-            .single();
-
-          if (insertErr) {
-            // Handle race condition: another job might have inserted this influencer
-            console.error(`[extract/status] Insert influencer error: ${insertErr.message}`);
-            // Try to find the existing record that was just inserted
-            const { data: justInserted } = await supabase
-              .from("influencers")
-              .select("id")
-              .eq("platform", job.platform)
-              .eq("platform_id", transformed.platform_id)
-              .single();
-            if (justInserted && job.campaign_id) {
-              await supabase
-                .from("campaign_influencers")
-                .upsert({
-                  campaign_id: job.campaign_id,
-                  influencer_id: justInserted.id,
-                  status: "extracted",
-                }, { onConflict: "campaign_id,influencer_id" });
-            }
-            continue;
-          }
-
-          if (newInf) {
-            newCount++;
-            // Link to campaign (only if campaign_id is provided)
-            if (job.campaign_id) {
-              await supabase
-                .from("campaign_influencers")
-                .upsert({
-                  campaign_id: job.campaign_id,
-                  influencer_id: newInf.id,
-                  status: "extracted",
-                }, { onConflict: "campaign_id,influencer_id" });
-            }
-
-            // Store bio links for future linktree scraping if no email found
-            if (!transformed.email && bioLinks.length > 0) {
-              for (const url of bioLinks) {
-                await supabase
-                  .from("influencer_links")
-                  .upsert(
-                    { influencer_id: newInf.id, url, scraped: false },
-                    { onConflict: "influencer_id,url" }
-                  );
-              }
-            }
-          }
-        } else {
-          // Update existing influencer with latest data
-          const updateData: Record<string, unknown> = {
-            username: transformed.username || undefined,
-            display_name: transformed.display_name || undefined,
-            profile_image_url: transformed.profile_image_url || undefined,
-            bio: transformed.bio || undefined,
-            follower_count: transformed.follower_count,
-            following_count: transformed.following_count,
-            post_count: transformed.post_count,
-            raw_data: transformed.raw_data,
-            last_updated_at: new Date().toISOString(),
-          };
-          // Update email only if we found one
-          if (transformed.email) {
-            updateData.email = transformed.email;
-            updateData.email_source = transformed.email_source;
-          }
-          // Remove undefined values
-          Object.keys(updateData).forEach(key => {
-            if (updateData[key] === undefined) delete updateData[key];
-          });
-          await supabase
-            .from("influencers")
-            .update(updateData)
-            .eq("id", existing.id);
-
-          // Append keyword to extracted_keywords if not already present
-          if (sourceKeyword) {
-            const { data: infKw } = await supabase
-              .from("influencers")
-              .select("extracted_keywords")
-              .eq("id", existing.id)
-              .single();
-            const currentKws = (infKw?.extracted_keywords as string[] | null) ?? [];
-            if (!currentKws.includes(sourceKeyword)) {
-              await supabase
-                .from("influencers")
-                .update({ extracted_keywords: [...currentKws, sourceKeyword] })
-                .eq("id", existing.id);
-            }
-          }
-
-          // Link existing to campaign (only if campaign_id is provided)
-          if (job.campaign_id) {
+        if (nextIndex < allItems.length) {
+          const nextItem = allItems[nextIndex];
+          console.log(`[extract/status] Social email: user ${currentIndex} failed, skipping to ${nextIndex} (${nextItem.user_id})`);
+          try {
+            const nextRun = await startActor(APIFY_ACTORS.SOCIAL_EMAIL_SCRAPER, {
+              platform: nextItem.platform,
+              username: nextItem.user_id,
+            });
             await supabase
-              .from("campaign_influencers")
-              .upsert({
-                campaign_id: job.campaign_id,
-                influencer_id: existing.id,
-                status: "extracted",
-              }, { onConflict: "campaign_id,influencer_id" });
-          }
-
-          // Store bio links for existing influencers without email
-          if (!transformed.email && bioLinks.length > 0) {
-            const { data: infCheck } = await supabase
-              .from("influencers")
-              .select("email")
-              .eq("id", existing.id)
-              .single();
-
-            if (infCheck && !infCheck.email) {
-              for (const url of bioLinks) {
-                await supabase
-                  .from("influencer_links")
-                  .upsert(
-                    { influencer_id: existing.id, url, scraped: false },
-                    { onConflict: "influencer_id,url" }
-                  );
-              }
-            }
+              .from("extraction_jobs")
+              .update({
+                apify_run_id: nextRun.id,
+                total_extracted: (job.total_extracted ?? 0) + 1,
+                input_config: { ...inputConfig, current_index: nextIndex } as unknown as Json,
+              })
+              .eq("id", jobId);
+            return NextResponse.json({ status: "running", total_extracted: (job.total_extracted ?? 0) + 1 });
+          } catch {
+            // Can't start next either, set null and let next poll retry
+            await supabase
+              .from("extraction_jobs")
+              .update({
+                apify_run_id: null,
+                total_extracted: (job.total_extracted ?? 0) + 1,
+                input_config: { ...inputConfig, current_index: nextIndex } as unknown as Json,
+              })
+              .eq("id", jobId);
+            return NextResponse.json({ status: "running", total_extracted: (job.total_extracted ?? 0) + 1 });
           }
         }
       }
 
-      // Update job status — unique influencer count, not raw item count
-      await supabase
-        .from("extraction_jobs")
-        .update({
-          status: "completed",
-          total_extracted: processedIds.size,
-          new_extracted: newCount,
-          completed_at: new Date().toISOString(),
-        })
-        .eq("id", jobId);
-
-      return NextResponse.json({
-        status: "completed",
-        total_extracted: processedIds.size,
-        new_extracted: newCount,
-      });
-    } else if (run.status === "FAILED" || run.status === "ABORTED") {
       await supabase
         .from("extraction_jobs")
         .update({ status: "failed", completed_at: new Date().toISOString() })
@@ -267,4 +171,1381 @@ export async function GET(request: Request) {
     console.error("[extract/status] Error:", message, err);
     return NextResponse.json({ error: message }, { status: 500 });
   }
+}
+
+/**
+ * Handle regular extraction results (keyword/tagged scrapers)
+ * Inserts new influencers or updates existing ones, links to campaign
+ */
+async function handleExtractionResults(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  job: ExtractionJob,
+  items: Record<string, unknown>[],
+  jobId: string,
+) {
+  // Look up source keyword/tag for extracted_keywords / extracted_from_tags fields
+  let sourceKeyword: string | null = null;
+  let sourceTag: string | null = null;
+  let sourceCountry: string | null = null;
+  if (job.type === "keyword" && job.source_id) {
+    const { data: kwData } = await supabase
+      .from("keywords")
+      .select("keyword, target_country")
+      .eq("id", job.source_id)
+      .single();
+    sourceKeyword = kwData?.keyword ?? null;
+    // Set country from keyword's target_country (if specific, not 'ALL')
+    if (kwData?.target_country && kwData.target_country !== "ALL") {
+      sourceCountry = kwData.target_country;
+    }
+  } else if (job.type === "tagged" && job.source_id) {
+    const { data: tagData } = await supabase
+      .from("tagged_accounts")
+      .select("account_username")
+      .eq("id", job.source_id)
+      .single();
+    sourceTag = tagData?.account_username ? `@${tagData.account_username}` : null;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Phase 1: Group items by (platform, platform_id) to collect ALL posts per user
+  // Hashtag scraper returns one item per post, so a user with 5 posts = 5 items.
+  // We accumulate them into _collectedPosts in raw_data.
+  // ---------------------------------------------------------------------------
+  type UserGroup = {
+    transformed: ReturnType<typeof transformApifyItem> & {};
+    rawItems: Record<string, unknown>[];
+  };
+  const groupedByUser = new Map<string, UserGroup>();
+
+  for (const item of items) {
+    const record = item as Record<string, unknown>;
+    const transformed = transformApifyItem(record, job.platform);
+    if (!transformed || !transformed.platform_id) continue;
+
+    const dedupeKey = `${transformed.platform}:${transformed.platform_id}`;
+    const existing = groupedByUser.get(dedupeKey);
+    if (existing) {
+      existing.rawItems.push(record);
+    } else {
+      groupedByUser.set(dedupeKey, { transformed, rawItems: [record] });
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Phase 2: Process each unique user with accumulated posts
+  // ---------------------------------------------------------------------------
+  console.log(`[handleExtractionResults] ${job.platform} ${job.type}: ${items.length} raw items → ${groupedByUser.size} unique users`);
+  let newCount = 0;
+
+  for (const [, { transformed, rawItems }] of groupedByUser) {
+    // Build collected posts array from all raw items
+    const collectedPosts: Record<string, unknown>[] = rawItems.map((raw) => ({
+      displayUrl: raw.displayUrl ?? raw.thumbnailSrc ?? null,
+      videoUrl: raw.videoUrl ?? null,
+      caption: raw.caption ?? raw.text ?? null,
+      likesCount: raw.likesCount ?? raw.diggCount ?? null,
+      commentsCount: raw.commentsCount ?? raw.commentCount ?? null,
+      viewCount: raw.viewCount ?? raw.playCount ?? null,
+      url: raw.url ?? null,
+      shortCode: raw.shortCode ?? null,
+      type: raw.type ?? (raw.videoUrl ? "Video" : "Image"),
+      timestamp: raw.timestamp ?? raw.createTimeISO ?? null,
+    }));
+
+    // Use first item as base raw_data, attach all collected posts
+    const enrichedRawData = {
+      ...(rawItems[0]),
+      _collectedPosts: collectedPosts,
+    } as unknown as Json;
+
+    const externalUrl = (rawItems[0].externalUrl ?? rawItems[0].externalUrlShimmed ?? null) as string | null;
+    const bioLinks = extractLinksFromBio(transformed.bio, externalUrl);
+
+    // Upsert influencer
+    const { data: existingInf } = await supabase
+      .from("influencers")
+      .select("id, raw_data, country")
+      .eq("platform", transformed.platform)
+      .eq("platform_id", transformed.platform_id)
+      .single();
+
+    if (!existingInf) {
+      const { data: newInf, error: insertErr } = await supabase
+        .from("influencers")
+        .insert({
+          platform: transformed.platform,
+          platform_id: transformed.platform_id,
+          username: transformed.username,
+          display_name: transformed.display_name,
+          profile_url: transformed.profile_url,
+          profile_image_url: transformed.profile_image_url,
+          bio: transformed.bio,
+          follower_count: transformed.follower_count,
+          following_count: transformed.following_count,
+          post_count: transformed.post_count,
+          engagement_rate: transformed.engagement_rate,
+          email: transformed.email,
+          email_source: transformed.email_source,
+          country: transformed.country || sourceCountry,
+          language: transformed.language,
+          raw_data: enrichedRawData,
+          extracted_keywords: sourceKeyword ? [sourceKeyword] : [],
+          extracted_from_tags: sourceTag ? [sourceTag] : [],
+          import_source: sourceKeyword
+            ? `apify:keyword:${sourceKeyword}`
+            : sourceTag
+              ? `apify:tagged:${sourceTag}`
+              : `apify:${job.type}`,
+          // Platform-specific fields
+          is_blue_verified: transformed.is_blue_verified,
+          verified_type: transformed.verified_type,
+          location: transformed.location,
+          heart_count: transformed.heart_count,
+          share_count: transformed.share_count,
+          total_views: transformed.total_views,
+          channel_joined_date: transformed.channel_joined_date,
+          is_monetized: transformed.is_monetized,
+          external_url: transformed.external_url,
+          avg_likes: transformed.avg_likes,
+          avg_comments: transformed.avg_comments,
+          avg_views: transformed.avg_views,
+          avg_shares: transformed.avg_shares,
+          // Content source fields
+          source_content_url: transformed.source_content_url,
+          source_content_text: transformed.source_content_text,
+          source_content_media: transformed.source_content_media,
+          source_content_created_at: transformed.source_content_created_at,
+          content_language: transformed.content_language,
+          content_hashtags: transformed.content_hashtags,
+          // Profile extended fields
+          account_created_at: transformed.account_created_at,
+          is_private: transformed.is_private ?? false,
+          cover_image_url: transformed.cover_image_url,
+          // Engagement metrics
+          bookmark_count: transformed.bookmark_count,
+          quote_count: transformed.quote_count,
+          favourites_count: transformed.favourites_count,
+          video_duration: transformed.video_duration,
+          video_title: transformed.video_title,
+          // Extended actor fields
+          listed_count: transformed.listed_count,
+          media_count: transformed.media_count,
+          is_sponsored: transformed.is_sponsored ?? false,
+          is_retweet: transformed.is_retweet ?? false,
+          is_reply: transformed.is_reply ?? false,
+          mentions: transformed.mentions,
+          music_info: transformed.music_info,
+          product_type: transformed.product_type,
+          // Existing DB fields from transform
+          is_verified: transformed.is_verified ?? false,
+          category: transformed.category,
+        })
+        .select("id")
+        .single();
+
+      if (insertErr) {
+        console.error(`[extract/status] Insert influencer error: ${insertErr.message}`);
+        const { data: justInserted } = await supabase
+          .from("influencers")
+          .select("id")
+          .eq("platform", transformed.platform)
+          .eq("platform_id", transformed.platform_id)
+          .single();
+        if (justInserted && job.campaign_id) {
+          await supabase
+            .from("campaign_influencers")
+            .upsert({
+              campaign_id: job.campaign_id,
+              influencer_id: justInserted.id,
+              status: "extracted",
+            }, { onConflict: "campaign_id,influencer_id" });
+        }
+        continue;
+      }
+
+      if (newInf) {
+        newCount++;
+        if (job.campaign_id) {
+          await supabase
+            .from("campaign_influencers")
+            .upsert({
+              campaign_id: job.campaign_id,
+              influencer_id: newInf.id,
+              status: "extracted",
+            }, { onConflict: "campaign_id,influencer_id" });
+        }
+
+        if (!transformed.email && bioLinks.length > 0) {
+          for (const url of bioLinks) {
+            await supabase
+              .from("influencer_links")
+              .upsert(
+                { influencer_id: newInf.id, url, scraped: false },
+                { onConflict: "influencer_id,url" }
+              );
+          }
+        }
+      }
+    } else {
+      // Merge raw_data: preserve existing latestPosts/profile data, add new collected posts
+      const existingRaw = (existingInf.raw_data ?? {}) as Record<string, unknown>;
+      const existingCollected = (existingRaw._collectedPosts ?? []) as Record<string, unknown>[];
+      // Merge new collected posts with existing ones (dedup by url or shortCode)
+      const existingUrls = new Set(existingCollected.map((p) => p.url ?? p.shortCode).filter(Boolean));
+      const newPosts = collectedPosts.filter((p) => !existingUrls.has(p.url ?? p.shortCode));
+      const mergedPosts = [...existingCollected, ...newPosts].slice(0, 30); // cap at 30
+
+      // Build merged raw_data: keep existing profile data (latestPosts etc), update posts
+      // CRITICAL: Preserve enrichment fields from profile scraper that re-extraction would overwrite
+      const mergedRawData = {
+        ...existingRaw,
+        ...(rawItems[0]),
+        _collectedPosts: mergedPosts,
+        // Preserve profile scraper enrichment data if present in existing
+        latestPosts: existingRaw.latestPosts ?? undefined,
+        biography: existingRaw.biography ?? (rawItems[0] as Record<string, unknown>).biography ?? undefined,
+        followersCount: existingRaw.followersCount ?? (rawItems[0] as Record<string, unknown>).followersCount ?? undefined,
+        followsCount: existingRaw.followsCount ?? (rawItems[0] as Record<string, unknown>).followsCount ?? undefined,
+        businessEmail: existingRaw.businessEmail ?? (rawItems[0] as Record<string, unknown>).businessEmail ?? undefined,
+        profilePicUrlHD: existingRaw.profilePicUrlHD ?? (rawItems[0] as Record<string, unknown>).profilePicUrlHD ?? undefined,
+        isBusinessAccount: existingRaw.isBusinessAccount ?? (rawItems[0] as Record<string, unknown>).isBusinessAccount ?? undefined,
+        businessCategoryName: existingRaw.businessCategoryName ?? (rawItems[0] as Record<string, unknown>).businessCategoryName ?? undefined,
+      } as unknown as Json;
+
+      const updateData: Record<string, unknown> = {
+        username: transformed.username || undefined,
+        display_name: transformed.display_name || undefined,
+        profile_image_url: transformed.profile_image_url || undefined,
+        bio: transformed.bio || undefined,
+        follower_count: transformed.follower_count,
+        following_count: transformed.following_count,
+        post_count: transformed.post_count,
+        raw_data: mergedRawData,
+        last_updated_at: new Date().toISOString(),
+      };
+      if (transformed.email) {
+        updateData.email = transformed.email;
+        updateData.email_source = transformed.email_source;
+      }
+      // Platform-specific fields
+      if (transformed.is_blue_verified !== null) updateData.is_blue_verified = transformed.is_blue_verified;
+      if (transformed.verified_type) updateData.verified_type = transformed.verified_type;
+      if (transformed.location) updateData.location = transformed.location;
+      if (transformed.heart_count !== null) updateData.heart_count = transformed.heart_count;
+      if (transformed.share_count !== null) updateData.share_count = transformed.share_count;
+      if (transformed.total_views !== null) updateData.total_views = transformed.total_views;
+      if (transformed.channel_joined_date) updateData.channel_joined_date = transformed.channel_joined_date;
+      if (transformed.is_monetized !== null) updateData.is_monetized = transformed.is_monetized;
+      if (transformed.external_url) updateData.external_url = transformed.external_url;
+      if (transformed.avg_likes !== null) updateData.avg_likes = transformed.avg_likes;
+      if (transformed.avg_comments !== null) updateData.avg_comments = transformed.avg_comments;
+      if (transformed.avg_views !== null) updateData.avg_views = transformed.avg_views;
+      if (transformed.avg_shares !== null) updateData.avg_shares = transformed.avg_shares;
+      // Content source fields
+      if (transformed.source_content_url) updateData.source_content_url = transformed.source_content_url;
+      if (transformed.source_content_text) updateData.source_content_text = transformed.source_content_text;
+      if (transformed.source_content_media) updateData.source_content_media = transformed.source_content_media;
+      if (transformed.source_content_created_at) updateData.source_content_created_at = transformed.source_content_created_at;
+      if (transformed.content_language) updateData.content_language = transformed.content_language;
+      if (transformed.content_hashtags) updateData.content_hashtags = transformed.content_hashtags;
+      // Profile extended fields
+      if (transformed.account_created_at) updateData.account_created_at = transformed.account_created_at;
+      if (transformed.is_private !== null) updateData.is_private = transformed.is_private;
+      if (transformed.cover_image_url) updateData.cover_image_url = transformed.cover_image_url;
+      // Engagement metrics
+      if (transformed.bookmark_count !== null) updateData.bookmark_count = transformed.bookmark_count;
+      if (transformed.quote_count !== null) updateData.quote_count = transformed.quote_count;
+      if (transformed.favourites_count !== null) updateData.favourites_count = transformed.favourites_count;
+      if (transformed.video_duration !== null) updateData.video_duration = transformed.video_duration;
+      if (transformed.video_title) updateData.video_title = transformed.video_title;
+      // Extended actor fields
+      if (transformed.listed_count !== null) updateData.listed_count = transformed.listed_count;
+      if (transformed.media_count !== null) updateData.media_count = transformed.media_count;
+      if (transformed.is_sponsored !== null) updateData.is_sponsored = transformed.is_sponsored;
+      if (transformed.is_retweet !== null) updateData.is_retweet = transformed.is_retweet;
+      if (transformed.is_reply !== null) updateData.is_reply = transformed.is_reply;
+      if (transformed.mentions) updateData.mentions = transformed.mentions;
+      if (transformed.music_info) updateData.music_info = transformed.music_info;
+      if (transformed.product_type) updateData.product_type = transformed.product_type;
+      // Existing DB fields
+      if (transformed.is_verified !== null) updateData.is_verified = transformed.is_verified;
+      if (transformed.category) updateData.category = transformed.category;
+      Object.keys(updateData).forEach(key => {
+        if (updateData[key] === undefined) delete updateData[key];
+      });
+      await supabase
+        .from("influencers")
+        .update(updateData)
+        .eq("id", existingInf.id);
+
+      if (sourceKeyword) {
+        const { data: infKw } = await supabase
+          .from("influencers")
+          .select("extracted_keywords")
+          .eq("id", existingInf.id)
+          .single();
+        const currentKws = (infKw?.extracted_keywords as string[] | null) ?? [];
+        if (!currentKws.includes(sourceKeyword)) {
+          await supabase
+            .from("influencers")
+            .update({ extracted_keywords: [...currentKws, sourceKeyword] })
+            .eq("id", existingInf.id);
+        }
+      }
+
+      if (sourceTag) {
+        const { data: infTag } = await supabase
+          .from("influencers")
+          .select("extracted_from_tags")
+          .eq("id", existingInf.id)
+          .single();
+        const currentTags = (infTag?.extracted_from_tags as string[] | null) ?? [];
+        if (!currentTags.includes(sourceTag)) {
+          await supabase
+            .from("influencers")
+            .update({ extracted_from_tags: [...currentTags, sourceTag] })
+            .eq("id", existingInf.id);
+        }
+      }
+
+      // Set country from keyword target_country if influencer doesn't have one
+      if (sourceCountry && !existingInf.country) {
+        await supabase
+          .from("influencers")
+          .update({ country: sourceCountry })
+          .eq("id", existingInf.id);
+      }
+
+      if (job.campaign_id) {
+        await supabase
+          .from("campaign_influencers")
+          .upsert({
+            campaign_id: job.campaign_id,
+            influencer_id: existingInf.id,
+            status: "extracted",
+          }, { onConflict: "campaign_id,influencer_id" });
+      }
+
+      if (!transformed.email && bioLinks.length > 0) {
+        const { data: infCheck } = await supabase
+          .from("influencers")
+          .select("email")
+          .eq("id", existingInf.id)
+          .single();
+
+        if (infCheck && !infCheck.email) {
+          for (const url of bioLinks) {
+            await supabase
+              .from("influencer_links")
+              .upsert(
+                { influencer_id: existingInf.id, url, scraped: false },
+                { onConflict: "influencer_id,url" }
+              );
+          }
+        }
+      }
+    }
+  }
+
+  // Update job status
+  const totalUsers = groupedByUser.size;
+  await supabase
+    .from("extraction_jobs")
+    .update({
+      status: "completed",
+      total_extracted: totalUsers,
+      new_extracted: newCount,
+      completed_at: new Date().toISOString(),
+    })
+    .eq("id", jobId);
+
+  // Auto-trigger profile enrichment for Instagram extraction (both global and campaign-scoped)
+  let enrichJobId: string | null = null;
+  if (job.platform === "instagram") {
+    if (job.campaign_id) {
+      enrichJobId = await autoTriggerEnrichment(supabase, job.campaign_id);
+    } else {
+      enrichJobId = await autoTriggerGlobalEnrichment(supabase);
+    }
+  }
+
+  // Auto-trigger cross-platform email extraction for ALL platforms (uses social-media-email-scraper)
+  let socialEmailJobId: string | null = null;
+  try {
+    socialEmailJobId = await autoTriggerSocialEmailExtraction(supabase, job.platform, job.campaign_id);
+  } catch (err) {
+    console.error("[extract/status] Auto social email extraction error:", err);
+  }
+
+  return NextResponse.json({
+    status: "completed",
+    total_extracted: totalUsers,
+    new_extracted: newCount,
+    enrich_job_id: enrichJobId,
+    social_email_job_id: socialEmailJobId,
+  });
+}
+
+/**
+ * Handle enrichment results (profile scraper output)
+ * Updates existing influencers with follower_count, bio, email, etc.
+ */
+async function handleEnrichmentResults(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  job: ExtractionJob,
+  items: Record<string, unknown>[],
+  jobId: string,
+) {
+  let enrichedCount = 0;
+  let emailsFound = 0;
+  const processedUsernames = new Set<string>();
+
+  for (const item of items) {
+    const record = item as Record<string, unknown>;
+    const transformed = transformApifyItem(record, "instagram");
+    if (!transformed) continue;
+    // Accept results even without username - we can match by platform_id
+    if (!transformed.username && !transformed.platform_id) continue;
+
+    // Deduplicate by username or platform_id
+    const dedupeKey = (transformed.username || transformed.platform_id || "").toLowerCase();
+    if (processedUsernames.has(dedupeKey)) continue;
+    processedUsernames.add(dedupeKey);
+
+    // Try matching by platform_id first (more reliable than username)
+    let existing: { id: string; email: string | null; follower_count: number | null } | null = null;
+
+    if (transformed.platform_id) {
+      const { data: byPlatformId } = await supabase
+        .from("influencers")
+        .select("id, email, follower_count")
+        .eq("platform", "instagram")
+        .eq("platform_id", transformed.platform_id)
+        .single();
+      existing = byPlatformId;
+    }
+
+    // Fallback: match by username (case-insensitive)
+    if (!existing && transformed.username) {
+      const { data: byUsername } = await supabase
+        .from("influencers")
+        .select("id, email, follower_count")
+        .eq("platform", "instagram")
+        .ilike("username", transformed.username)
+        .single();
+      existing = byUsername;
+    }
+
+    if (!existing) continue;
+
+    await enrichInfluencer(supabase, existing, transformed, record);
+    enrichedCount++;
+    if (transformed.email && !existing.email) emailsFound++;
+  }
+
+  // Update job status
+  await supabase
+    .from("extraction_jobs")
+    .update({
+      status: "completed",
+      total_extracted: enrichedCount,
+      new_extracted: emailsFound,
+      completed_at: new Date().toISOString(),
+    })
+    .eq("id", jobId);
+
+  // Auto-trigger email batch extraction for unscraped bio-links
+  let emailScrapeJobId: string | null = null;
+  try {
+    emailScrapeJobId = await autoTriggerEmailExtraction(supabase, job.campaign_id);
+  } catch (err) {
+    console.error("[extract/status] Auto email extraction trigger error:", err);
+  }
+
+  return NextResponse.json({
+    status: "completed",
+    total_extracted: enrichedCount,
+    new_extracted: emailsFound,
+    type: "enrich",
+    email_scrape_job_id: emailScrapeJobId,
+  });
+}
+
+/**
+ * Update a single influencer with profile enrichment data
+ */
+async function enrichInfluencer(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  existing: { id: string; email: string | null; follower_count: number | null },
+  transformed: ReturnType<typeof transformApifyItem> & {},
+  record: Record<string, unknown>,
+) {
+  // Build update data - only overwrite with non-null values
+  const updateData: Record<string, unknown> = {
+    last_updated_at: new Date().toISOString(),
+  };
+
+  // CRITICAL: Update all fields from profile scraper enrichment.
+  // Hashtag scraper doesn't return profile pics, follower counts, or bio - profile scraper fills these in.
+  if (transformed.username) updateData.username = transformed.username;
+  if (transformed.follower_count !== null) updateData.follower_count = transformed.follower_count;
+  if (transformed.following_count !== null) updateData.following_count = transformed.following_count;
+  if (transformed.post_count !== null) updateData.post_count = transformed.post_count;
+  if (transformed.bio) updateData.bio = transformed.bio;
+  if (transformed.display_name) updateData.display_name = transformed.display_name;
+  // Profile image: always update if we got a valid URL (even if existing was empty string "")
+  if (transformed.profile_image_url && transformed.profile_image_url.startsWith("http")) {
+    updateData.profile_image_url = transformed.profile_image_url;
+  }
+  if (transformed.profile_url) updateData.profile_url = transformed.profile_url;
+  if (transformed.platform_id) updateData.platform_id = transformed.platform_id;
+  if (transformed.engagement_rate !== null) {
+    updateData.engagement_rate = transformed.engagement_rate;
+  } else if (transformed.follower_count && transformed.follower_count > 0 && Array.isArray(record.latestPosts)) {
+    // Calculate engagement_rate from latestPosts: avg(likes + comments) / follower_count
+    const posts = record.latestPosts as Record<string, unknown>[];
+    const recentPosts = posts.slice(0, 12);
+    if (recentPosts.length > 0) {
+      let totalEngagement = 0;
+      for (const post of recentPosts) {
+        const likes = Number(post.likesCount ?? post.likes ?? 0) || 0;
+        const comments = Number(post.commentsCount ?? post.comments ?? 0) || 0;
+        totalEngagement += likes + comments;
+      }
+      const avgEngagement = totalEngagement / recentPosts.length;
+      const rate = avgEngagement / transformed.follower_count;
+      updateData.engagement_rate = Math.round(rate * 10000) / 10000; // Store as decimal (e.g., 0.0345 = 3.45%)
+    }
+  }
+
+  // Map profile scraper fields to new columns
+  // Profile Scraper uses "verified" (NOT "isVerified")
+  if (record.verified === true) updateData.is_verified = true;
+  else if (record.verified === false) updateData.is_verified = false;
+  if (record.isBusinessAccount === true) updateData.is_business = true;
+  else if (record.isBusinessAccount === false) updateData.is_business = false;
+  if (record.businessCategoryName && typeof record.businessCategoryName === "string") {
+    let cat = record.businessCategoryName;
+    // Profile Scraper sometimes returns "None,Category" format - strip "None,"
+    if (cat.startsWith("None,")) cat = cat.replace("None,", "").trim();
+    if (cat && cat !== "None") updateData.category = cat;
+  }
+
+  // External URL from profile scraper
+  const enrichExternalUrl = (record.externalUrl ?? record.externalUrlShimmed) as string | undefined;
+  if (enrichExternalUrl) updateData.external_url = enrichExternalUrl;
+
+  // Compute avg metrics from latestPosts
+  if (Array.isArray(record.latestPosts)) {
+    const posts = record.latestPosts as Record<string, unknown>[];
+    const recentPosts = posts.slice(0, 12);
+    if (recentPosts.length > 0) {
+      let totalLikes = 0, totalComments = 0, totalViews = 0;
+      for (const post of recentPosts) {
+        totalLikes += Number(post.likesCount ?? post.likes ?? 0) || 0;
+        totalComments += Number(post.commentsCount ?? post.comments ?? 0) || 0;
+        totalViews += Number(post.videoViewCount ?? post.viewCount ?? 0) || 0;
+      }
+      updateData.avg_likes = Math.round(totalLikes / recentPosts.length);
+      updateData.avg_comments = Math.round(totalComments / recentPosts.length);
+      if (totalViews > 0) updateData.avg_views = Math.round(totalViews / recentPosts.length);
+    }
+  }
+
+  // Update email: businessEmail always takes priority over regex-extracted email
+  const businessEmail = record.businessEmail as string | null;
+  if (businessEmail && businessEmail.includes("@")) {
+    // businessEmail from Profile Scraper - highest priority, always overwrite
+    updateData.email = businessEmail;
+    updateData.email_source = "business";
+  } else if (transformed.email && !existing.email) {
+    // Bio regex email - only if influencer doesn't already have one
+    updateData.email = transformed.email;
+    updateData.email_source = transformed.email_source;
+  }
+
+  // Merge raw_data: preserve _collectedPosts from extraction, add profile data + latestPosts
+  const { data: currentInf } = await supabase
+    .from("influencers")
+    .select("raw_data")
+    .eq("id", existing.id)
+    .single();
+  const existingRaw = (currentInf?.raw_data ?? {}) as Record<string, unknown>;
+  const collectedPosts = existingRaw._collectedPosts ?? [];
+
+  // Profile scraper returns latestPosts - these are preserved via ...record spread
+  const hasLatestPosts = Array.isArray(record.latestPosts) && (record.latestPosts as unknown[]).length > 0;
+  updateData.raw_data = {
+    ...record,
+    _collectedPosts: collectedPosts, // Preserve posts from extraction
+  } as unknown as Json;
+
+  const updatedFields = Object.keys(updateData).filter(k => k !== "last_updated_at" && k !== "raw_data");
+  console.log(`[enrichInfluencer] ${transformed.username || transformed.platform_id}: updating [${updatedFields.join(", ")}]${hasLatestPosts ? ` + ${(record.latestPosts as unknown[]).length} latestPosts` : ""}`);
+
+  await supabase
+    .from("influencers")
+    .update(updateData)
+    .eq("id", existing.id);
+
+  // Store bio links for email extraction - always save (even if email exists, better email may be found)
+  // Filter out Amazon, YouTube, TikTok etc. that never have personal emails
+  {
+    const externalUrl = (record.externalUrl ?? record.externalUrlShimmed ?? null) as string | null;
+    const bioLinks = extractLinksFromBio(transformed.bio, externalUrl);
+    const extractableLinks = bioLinks.filter(url => isEmailExtractableLink(url));
+
+    if (extractableLinks.length > 0) {
+      for (const url of extractableLinks) {
+        await supabase
+          .from("influencer_links")
+          .upsert(
+            { influencer_id: existing.id, url, scraped: false },
+            { onConflict: "influencer_id,url" }
+          );
+      }
+      console.log(`[enrichInfluencer] ${transformed.username}: stored ${extractableLinks.length}/${bioLinks.length} extractable bio links`);
+    }
+  }
+}
+
+/**
+ * Auto-trigger profile enrichment for Instagram influencers lacking follower data
+ */
+async function autoTriggerEnrichment(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  campaignId: string,
+): Promise<string | null> {
+  try {
+    // Check if there's already a running enrichment job for this campaign
+    const { data: existingEnrich } = await supabase
+      .from("extraction_jobs")
+      .select("id")
+      .eq("campaign_id", campaignId)
+      .eq("type", "enrich")
+      .eq("platform", "instagram")
+      .in("status", ["running", "pending"])
+      .limit(1);
+
+    if (existingEnrich && existingEnrich.length > 0) {
+      console.log("[extract/status] Enrichment already running for campaign:", campaignId);
+      return null;
+    }
+
+    // Find Instagram influencers in campaign that need enrichment
+    // (missing follower_count OR missing profile_image_url)
+    const { data: ciData } = await supabase
+      .from("campaign_influencers")
+      .select("influencer_id")
+      .eq("campaign_id", campaignId);
+
+    if (!ciData || ciData.length === 0) return null;
+
+    const infIds = ciData.map((ci) => ci.influencer_id);
+    // Find influencers needing enrichment: follower_count is null OR profile_image_url is empty
+    const { data: unenriched } = await supabase
+      .from("influencers")
+      .select("id, username, platform_id, follower_count, profile_image_url")
+      .eq("platform", "instagram")
+      .in("id", infIds)
+      .or("follower_count.is.null,profile_image_url.eq.,profile_image_url.is.null");
+
+    if (!unenriched || unenriched.length === 0) {
+      console.log("[extract/status] No Instagram influencers need enrichment in campaign:", campaignId);
+      return null;
+    }
+
+    // Log why each influencer needs enrichment
+    const needsFollowers = unenriched.filter((inf) => (inf as Record<string, unknown>).follower_count === null).length;
+    const needsProfilePic = unenriched.filter((inf) => {
+      const pic = (inf as Record<string, unknown>).profile_image_url;
+      return !pic || pic === "";
+    }).length;
+    console.log(`[extract/status] Campaign ${campaignId}: ${unenriched.length} need enrichment (${needsFollowers} missing followers, ${needsProfilePic} missing profile pic)`);
+
+    // Use username when available, fall back to platform_id (numeric ownerId)
+    const identifiers = unenriched
+      .map((inf) => {
+        const username = (inf as { username: string | null }).username;
+        const platformId = (inf as { platform_id: string | null }).platform_id;
+        if (username && username.trim() !== "") return username.trim();
+        if (platformId && platformId.trim() !== "") return platformId.trim();
+        return null;
+      })
+      .filter((u): u is string => !!u);
+
+    const uniqueIdentifiers = [...new Set(identifiers)];
+    if (uniqueIdentifiers.length === 0) return null;
+
+    console.log(`[extract/status] Auto-triggering enrichment for ${uniqueIdentifiers.length} Instagram influencers`);
+
+    // Create enrichment job
+    const { data: jobData, error: jobError } = await supabase
+      .from("extraction_jobs")
+      .insert({
+        campaign_id: campaignId,
+        type: "enrich",
+        platform: "instagram",
+        status: "running",
+        input_config: { usernames: uniqueIdentifiers } as unknown as Json,
+        started_at: new Date().toISOString(),
+      })
+      .select("id")
+      .single();
+
+    if (jobError || !jobData) {
+      console.error("[extract/status] Failed to create enrichment job:", jobError?.message);
+      return null;
+    }
+
+    // Start Instagram Profile Scraper (accepts both usernames and numeric IDs)
+    const run = await startActor(APIFY_ACTORS.INSTAGRAM_PROFILE, {
+      usernames: uniqueIdentifiers,
+    });
+
+    await supabase
+      .from("extraction_jobs")
+      .update({ apify_run_id: run.id })
+      .eq("id", jobData.id);
+
+    console.log(`[extract/status] Enrichment job started: ${jobData.id} (Apify run: ${run.id})`);
+    return jobData.id;
+  } catch (err) {
+    console.error("[extract/status] Auto-trigger enrichment error:", err);
+    return null;
+  }
+}
+
+/**
+ * Auto-trigger global profile enrichment for Instagram influencers lacking follower data or profile pics
+ * Used when extraction is global (no campaign_id)
+ */
+async function autoTriggerGlobalEnrichment(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+): Promise<string | null> {
+  try {
+    // Check if there's already a running global enrichment job
+    const { data: existingEnrich } = await supabase
+      .from("extraction_jobs")
+      .select("id")
+      .is("campaign_id", null)
+      .eq("type", "enrich")
+      .eq("platform", "instagram")
+      .in("status", ["running", "pending"])
+      .limit(1);
+
+    if (existingEnrich && existingEnrich.length > 0) {
+      console.log("[extract/status] Global enrichment already running");
+      return null;
+    }
+
+    // Find ALL Instagram influencers needing enrichment (missing follower_count OR profile_image_url)
+    // Select platform_id too - profile scraper accepts numeric IDs when username is empty
+    const { data: unenriched } = await supabase
+      .from("influencers")
+      .select("id, username, platform_id, follower_count, profile_image_url")
+      .eq("platform", "instagram")
+      .or("follower_count.is.null,profile_image_url.eq.,profile_image_url.is.null")
+      .limit(200);
+
+    if (!unenriched || unenriched.length === 0) {
+      console.log("[extract/status] No Instagram influencers need global enrichment");
+      return null;
+    }
+
+    // Log why each influencer needs enrichment
+    const needsFollowers = unenriched.filter((inf) => (inf as Record<string, unknown>).follower_count === null).length;
+    const needsProfilePic = unenriched.filter((inf) => {
+      const pic = (inf as Record<string, unknown>).profile_image_url;
+      return !pic || pic === "";
+    }).length;
+    console.log(`[extract/status] Global: ${unenriched.length} need enrichment (${needsFollowers} missing followers, ${needsProfilePic} missing profile pic)`);
+
+    // Use username when available, fall back to platform_id (numeric ownerId)
+    // Instagram Profile Scraper accepts both usernames and numeric user IDs
+    const identifiers = unenriched
+      .map((inf) => {
+        const username = (inf as { username: string | null }).username;
+        const platformId = (inf as { platform_id: string | null }).platform_id;
+        if (username && username.trim() !== "") return username.trim();
+        if (platformId && platformId.trim() !== "") return platformId.trim();
+        return null;
+      })
+      .filter((u): u is string => !!u);
+
+    const uniqueIdentifiers = [...new Set(identifiers)];
+    if (uniqueIdentifiers.length === 0) return null;
+
+    const byIdCount = uniqueIdentifiers.filter(i => /^\d+$/.test(i)).length;
+    console.log(`[extract/status] Auto-triggering global enrichment for ${uniqueIdentifiers.length} Instagram influencers (${byIdCount} by numeric ID, ${uniqueIdentifiers.length - byIdCount} by username)`);
+
+    // Create global enrichment job (no campaign_id)
+    const { data: jobData, error: jobError } = await supabase
+      .from("extraction_jobs")
+      .insert({
+        campaign_id: null,
+        type: "enrich",
+        platform: "instagram",
+        status: "running",
+        input_config: { usernames: uniqueIdentifiers } as unknown as Json,
+        started_at: new Date().toISOString(),
+      })
+      .select("id")
+      .single();
+
+    if (jobError || !jobData) {
+      console.error("[extract/status] Failed to create global enrichment job:", jobError?.message);
+      return null;
+    }
+
+    // Start Instagram Profile Scraper (accepts both usernames and numeric IDs)
+    const run = await startActor(APIFY_ACTORS.INSTAGRAM_PROFILE, {
+      usernames: uniqueIdentifiers,
+    });
+
+    await supabase
+      .from("extraction_jobs")
+      .update({ apify_run_id: run.id })
+      .eq("id", jobData.id);
+
+    console.log(`[extract/status] Global enrichment job started: ${jobData.id} (Apify run: ${run.id})`);
+    return jobData.id;
+  } catch (err) {
+    console.error("[extract/status] Auto-trigger global enrichment error:", err);
+    return null;
+  }
+}
+
+/**
+ * Auto-trigger email extraction for unscraped bio-links after enrichment
+ * Batches URLs in groups of 200 to prevent Apify timeout
+ */
+async function autoTriggerEmailExtraction(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  campaignId: string | null,
+): Promise<string | null> {
+  try {
+    // Check if there's already a running email_scrape job
+    const existingQuery = supabase
+      .from("extraction_jobs")
+      .select("id")
+      .eq("type", "email_scrape")
+      .in("status", ["running", "pending"])
+      .limit(1);
+
+    if (campaignId) {
+      existingQuery.eq("campaign_id", campaignId);
+    } else {
+      existingQuery.is("campaign_id", null);
+    }
+
+    const { data: existingJob } = await existingQuery;
+    if (existingJob && existingJob.length > 0) {
+      console.log("[extract/status] Email scrape already running");
+      return null;
+    }
+
+    // Find unscraped bio-links (limit 200 to prevent timeout)
+    const { data: links } = await supabase
+      .from("influencer_links")
+      .select("id, influencer_id, url")
+      .eq("scraped", false)
+      .limit(200);
+
+    if (!links || links.length === 0) {
+      console.log("[extract/status] No unscraped bio-links for email extraction");
+      return null;
+    }
+
+    // Build URL list and link map
+    const urls: string[] = [];
+    const linkMap: Record<string, { link_id: string; influencer_id: string }> = {};
+    for (const link of links) {
+      urls.push(link.url);
+      linkMap[link.url] = { link_id: link.id, influencer_id: link.influencer_id };
+    }
+
+    // Create email_scrape job
+    const { data: jobData, error: jobError } = await supabase
+      .from("extraction_jobs")
+      .insert({
+        campaign_id: campaignId,
+        type: "email_scrape",
+        platform: "all",
+        status: "running",
+        input_config: {
+          urls,
+          link_map: linkMap,
+          total_links: links.length,
+          auto_triggered: true,
+        } as unknown as Json,
+        started_at: new Date().toISOString(),
+      })
+      .select("id")
+      .single();
+
+    if (jobError || !jobData) {
+      console.error("[extract/status] Failed to create email scrape job:", jobError?.message);
+      return null;
+    }
+
+    // Start EMAIL_EXTRACTOR with startUrls format
+    const run = await startActor(APIFY_ACTORS.EMAIL_EXTRACTOR, {
+      startUrls: urls.map(url => ({ url })),
+    });
+
+    await supabase
+      .from("extraction_jobs")
+      .update({ apify_run_id: run.id })
+      .eq("id", jobData.id);
+
+    console.log(`[extract/status] Auto email extraction started: ${jobData.id} (${links.length} URLs, Apify run: ${run.id})`);
+    return jobData.id;
+  } catch (err) {
+    console.error("[extract/status] Auto email extraction error:", err);
+    return null;
+  }
+}
+
+/**
+ * Handle batch email scrape results (EMAIL_EXTRACTOR actor output)
+ * Matches scraped URLs back to influencer_links, updates influencers with found emails
+ */
+async function handleEmailScrapeResults(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  job: ExtractionJob,
+  items: Record<string, unknown>[],
+  jobId: string,
+) {
+  // Retrieve the link_map from input_config
+  const inputConfig = job.input_config as Record<string, unknown> | null;
+  const linkMap = (inputConfig?.link_map ?? {}) as Record<
+    string,
+    { link_id: string; influencer_id: string }
+  >;
+
+  let totalProcessed = 0;
+  let emailsFound = 0;
+  // Track which influencers already got an email in this batch to avoid overwriting
+  const influencerEmailSet = new Set<string>();
+
+  for (const item of items) {
+    const result = item as Record<string, unknown>;
+    const scrapedUrl = (result.sourceUrl ?? result.url ?? result.inputUrl ?? result.link) as string | undefined;
+    const emails = (result.emails ?? result.email) as string[] | string | undefined;
+
+    // Normalize emails to array
+    let emailList: string[] = [];
+    if (Array.isArray(emails)) {
+      emailList = emails.filter((e) => typeof e === "string" && e.includes("@"));
+    } else if (typeof emails === "string" && emails.includes("@")) {
+      emailList = [emails];
+    }
+
+    // Try to match this result back to a link via URL
+    let matchedLink: { link_id: string; influencer_id: string } | null = null;
+
+    if (scrapedUrl && linkMap[scrapedUrl]) {
+      matchedLink = linkMap[scrapedUrl];
+    } else if (scrapedUrl) {
+      // Normalize URL for matching: handles HTTP/HTTPS, www, trailing slashes, query params
+      const normalizedScraped = normalizeUrl(scrapedUrl);
+      for (const [mapUrl, mapInfo] of Object.entries(linkMap)) {
+        if (normalizeUrl(mapUrl) === normalizedScraped) {
+          matchedLink = mapInfo;
+          break;
+        }
+      }
+    }
+
+    if (!matchedLink) {
+      // Could not match this result to a link, skip
+      continue;
+    }
+
+    totalProcessed++;
+
+    // Update influencer_links: mark as scraped with results
+    await supabase
+      .from("influencer_links")
+      .update({
+        scraped: true,
+        emails_found: emailList.length > 0 ? emailList : null,
+        scraped_at: new Date().toISOString(),
+      })
+      .eq("id", matchedLink.link_id);
+
+    // If emails were found and influencer doesn't already have one from this batch
+    if (emailList.length > 0 && !influencerEmailSet.has(matchedLink.influencer_id)) {
+      // Check if influencer still doesn't have an email (could have been set by another process)
+      const { data: infCheck } = await supabase
+        .from("influencers")
+        .select("email")
+        .eq("id", matchedLink.influencer_id)
+        .single();
+
+      if (infCheck && !infCheck.email) {
+        const foundEmail = emailList[0];
+        // Extract domain from the source URL for email_source
+        // Format: "linktree:https://linktr.ee/username" to include source info
+        let emailSource = "linktree";
+        if (scrapedUrl) {
+          try {
+            const urlObj = new URL(scrapedUrl);
+            const domain = urlObj.hostname.replace("www.", "");
+            emailSource = `${domain}:${scrapedUrl}`;
+          } catch {
+            emailSource = `link:${scrapedUrl}`;
+          }
+        }
+
+        await supabase
+          .from("influencers")
+          .update({
+            email: foundEmail,
+            email_source: emailSource,
+          })
+          .eq("id", matchedLink.influencer_id);
+
+        influencerEmailSet.add(matchedLink.influencer_id);
+        emailsFound++;
+      }
+    }
+  }
+
+  // Mark any remaining unmatched links as scraped (no results found)
+  // This handles links that the actor didn't return results for
+  const processedLinkIds = new Set<string>();
+  for (const item of items) {
+    const result = item as Record<string, unknown>;
+    const scrapedUrl = (result.sourceUrl ?? result.url ?? result.inputUrl ?? result.link) as string | undefined;
+    if (scrapedUrl && linkMap[scrapedUrl]) {
+      processedLinkIds.add(linkMap[scrapedUrl].link_id);
+    }
+  }
+
+  // Get all link IDs from the original input
+  const allLinkIds = Object.values(linkMap).map((m) => m.link_id);
+  const unprocessedLinkIds = allLinkIds.filter((id) => !processedLinkIds.has(id));
+
+  if (unprocessedLinkIds.length > 0) {
+    // Batch update unprocessed links as scraped with no results
+    for (const linkId of unprocessedLinkIds) {
+      await supabase
+        .from("influencer_links")
+        .update({
+          scraped: true,
+          emails_found: null,
+          scraped_at: new Date().toISOString(),
+        })
+        .eq("id", linkId);
+    }
+  }
+
+  // Update job status
+  await supabase
+    .from("extraction_jobs")
+    .update({
+      status: "completed",
+      total_extracted: totalProcessed,
+      new_extracted: emailsFound,
+      completed_at: new Date().toISOString(),
+    })
+    .eq("id", jobId);
+
+  console.log(
+    `[extract/status] Email scrape completed: ${totalProcessed} links processed, ${emailsFound} emails found`
+  );
+
+  return NextResponse.json({
+    status: "completed",
+    total_extracted: totalProcessed,
+    new_extracted: emailsFound,
+    type: "email_scrape",
+  });
+}
+
+/**
+ * Auto-trigger cross-platform email extraction using social-media-email-scraper
+ * Works for ALL platforms: Instagram, TikTok, YouTube, Twitter
+ * Finds emails by platform + user_id lookup (no website scraping needed)
+ */
+async function autoTriggerSocialEmailExtraction(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  platform: string,
+  campaignId: string | null,
+): Promise<string | null> {
+  try {
+    // Check if there's already a running social email job
+    const existingQuery = supabase
+      .from("extraction_jobs")
+      .select("id")
+      .eq("type", "email_social")
+      .eq("platform", platform)
+      .in("status", ["running", "pending"])
+      .limit(1);
+
+    if (campaignId) {
+      existingQuery.eq("campaign_id", campaignId);
+    } else {
+      existingQuery.is("campaign_id", null);
+    }
+
+    const { data: existingJob } = await existingQuery;
+    if (existingJob && existingJob.length > 0) {
+      console.log("[extract/status] Social email extraction already running for", platform);
+      return null;
+    }
+
+    // Find influencers without email for this platform
+    let infQuery = supabase
+      .from("influencers")
+      .select("id, platform_id, username")
+      .eq("platform", platform)
+      .is("email", null)
+      .not("platform_id", "is", null)
+      .limit(200);
+
+    // If campaign-scoped, filter by campaign_influencers
+    if (campaignId) {
+      const { data: ciData } = await supabase
+        .from("campaign_influencers")
+        .select("influencer_id")
+        .eq("campaign_id", campaignId);
+      if (!ciData || ciData.length === 0) return null;
+      const infIds = ciData.map((ci) => ci.influencer_id);
+      infQuery = infQuery.in("id", infIds);
+    }
+
+    const { data: noEmailInfs } = await infQuery;
+    if (!noEmailInfs || noEmailInfs.length === 0) {
+      console.log(`[extract/status] No ${platform} influencers without email`);
+      return null;
+    }
+
+    // Map platform names for the social email scraper input
+    const platformMap: Record<string, string> = {
+      instagram: "instagram",
+      tiktok: "tiktok",
+      youtube: "youtube",
+      twitter: "twitter",
+    };
+    const scraperPlatform = platformMap[platform] ?? platform;
+
+    // Build batch input: array of {platform, user_id} objects
+    const lookupItems = noEmailInfs.map((inf) => ({
+      platform: scraperPlatform,
+      user_id: (inf as { platform_id: string | null; username: string | null }).username
+        || (inf as { platform_id: string | null }).platform_id
+        || "",
+    })).filter((item) => item.user_id !== "");
+
+    if (lookupItems.length === 0) return null;
+
+    // Build influencer map for result matching
+    const infMap: Record<string, string> = {};
+    for (const inf of noEmailInfs) {
+      const typedInf = inf as { id: string; platform_id: string | null; username: string | null };
+      if (typedInf.username) infMap[typedInf.username.toLowerCase()] = typedInf.id;
+      if (typedInf.platform_id) infMap[typedInf.platform_id] = typedInf.id;
+    }
+
+    // The social-media-email-scraper only accepts single user input (platform, user_id/username).
+    // To batch, we run ONE actor per user. Limit to max 50 to avoid excessive Apify costs.
+    const batchItems = lookupItems.slice(0, 50);
+    console.log(`[extract/status] Auto-triggering social email extraction: ${batchItems.length} ${platform} influencers (of ${lookupItems.length} total)`);
+
+    // Create job record
+    const { data: jobData, error: jobError } = await supabase
+      .from("extraction_jobs")
+      .insert({
+        campaign_id: campaignId,
+        type: "email_social",
+        platform,
+        status: "running",
+        input_config: {
+          items: batchItems,
+          influencer_map: infMap,
+          total: batchItems.length,
+        } as unknown as Json,
+        started_at: new Date().toISOString(),
+      })
+      .select("id")
+      .single();
+
+    if (jobError || !jobData) {
+      console.error("[extract/status] Failed to create social email job:", jobError?.message);
+      return null;
+    }
+
+    // Start the first user lookup - the actor takes single user input
+    // We start with the first item; handleSocialEmailResults will chain the rest
+    const firstItem = batchItems[0];
+    try {
+      const run = await startActor(APIFY_ACTORS.SOCIAL_EMAIL_SCRAPER, {
+        platform: firstItem.platform,
+        username: firstItem.user_id,
+      });
+
+      await supabase
+        .from("extraction_jobs")
+        .update({
+          apify_run_id: run.id,
+          input_config: {
+            items: batchItems,
+            influencer_map: infMap,
+            total: batchItems.length,
+            current_index: 0,
+          } as unknown as Json,
+        })
+        .eq("id", jobData.id);
+
+      console.log(`[extract/status] Social email job started: ${jobData.id} (Apify run: ${run.id}, user: ${firstItem.user_id})`);
+      return jobData.id;
+    } catch (startErr) {
+      console.error("[extract/status] Failed to start social email actor:", startErr);
+      await supabase
+        .from("extraction_jobs")
+        .update({ status: "failed", completed_at: new Date().toISOString() })
+        .eq("id", jobData.id);
+      return null;
+    }
+  } catch (err) {
+    console.error("[extract/status] Auto social email extraction error:", err);
+    return null;
+  }
+}
+
+/**
+ * Handle results from social-media-email-scraper (cross-platform email lookup)
+ * Matches results back to influencers and updates their email
+ */
+async function handleSocialEmailResults(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  job: ExtractionJob,
+  items: Record<string, unknown>[],
+  jobId: string,
+) {
+  const inputConfig = job.input_config as Record<string, unknown> | null;
+  const infMap = (inputConfig?.influencer_map ?? {}) as Record<string, string>;
+  const allItems = (inputConfig?.items ?? []) as { platform: string; user_id: string }[];
+  const currentIndex = (inputConfig?.current_index ?? 0) as number;
+  const prevExtracted = job.total_extracted ?? 0;
+  const prevEmails = job.new_extracted ?? 0;
+
+  let emailsFound = 0;
+
+  // Process result from current single-user lookup
+  for (const item of items) {
+    const result = item as Record<string, unknown>;
+    const email = (result.email ?? result.emails) as string | string[] | undefined;
+    const userId = (result.user_id ?? result.userId ?? result.username ?? result.id) as string | undefined;
+
+    let finalEmail: string | null = null;
+    if (Array.isArray(email)) {
+      finalEmail = email.find((e) => typeof e === "string" && e.includes("@")) ?? null;
+    } else if (typeof email === "string" && email.includes("@")) {
+      finalEmail = email;
+    }
+
+    if (!finalEmail) continue;
+
+    // Try matching via infMap
+    const matchKey = userId?.toLowerCase() ?? "";
+    const influencerId = infMap[matchKey] ?? (userId ? infMap[userId] : null) ?? null;
+    if (!influencerId) continue;
+
+    const { data: infCheck } = await supabase
+      .from("influencers")
+      .select("email")
+      .eq("id", influencerId)
+      .single();
+
+    if (infCheck && !infCheck.email) {
+      await supabase
+        .from("influencers")
+        .update({
+          email: finalEmail,
+          email_source: `social-scraper:${job.platform}`,
+        })
+        .eq("id", influencerId);
+      emailsFound++;
+    }
+  }
+
+  const totalProcessed = prevExtracted + 1;
+  const totalEmails = prevEmails + emailsFound;
+  const nextIndex = currentIndex + 1;
+
+  // Check if there are more users to process
+  if (nextIndex < allItems.length) {
+    const nextItem = allItems[nextIndex];
+    try {
+      const run = await startActor(APIFY_ACTORS.SOCIAL_EMAIL_SCRAPER, {
+        platform: nextItem.platform,
+        username: nextItem.user_id,
+      });
+
+      // Update job with next run ID and progress
+      await supabase
+        .from("extraction_jobs")
+        .update({
+          apify_run_id: run.id,
+          total_extracted: totalProcessed,
+          new_extracted: totalEmails,
+          input_config: {
+            ...inputConfig,
+            current_index: nextIndex,
+          } as unknown as Json,
+        })
+        .eq("id", jobId);
+
+      console.log(`[extract/status] Social email: ${totalProcessed}/${allItems.length} done, ${totalEmails} emails. Next: ${nextItem.user_id}`);
+
+      return NextResponse.json({
+        status: "running",
+        total_extracted: totalProcessed,
+        new_extracted: totalEmails,
+        type: "email_social",
+        progress: `${totalProcessed}/${allItems.length}`,
+      });
+    } catch (err) {
+      console.error(`[extract/status] Social email actor start failed for ${nextItem.user_id}:`, err);
+      // Skip this user, try to continue with next
+      // Update index and try again on next poll
+      await supabase
+        .from("extraction_jobs")
+        .update({
+          apify_run_id: null,
+          total_extracted: totalProcessed,
+          new_extracted: totalEmails,
+          input_config: {
+            ...inputConfig,
+            current_index: nextIndex,
+          } as unknown as Json,
+        })
+        .eq("id", jobId);
+    }
+  }
+
+  // All users processed or final item
+  await supabase
+    .from("extraction_jobs")
+    .update({
+      status: "completed",
+      total_extracted: totalProcessed,
+      new_extracted: totalEmails,
+      completed_at: new Date().toISOString(),
+    })
+    .eq("id", jobId);
+
+  console.log(`[extract/status] Social email completed: ${totalProcessed}/${allItems.length} processed, ${totalEmails} emails found`);
+
+  return NextResponse.json({
+    status: "completed",
+    total_extracted: totalProcessed,
+    new_extracted: totalEmails,
+    type: "email_social",
+  });
 }

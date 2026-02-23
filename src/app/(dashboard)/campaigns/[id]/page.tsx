@@ -1,7 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Hash, AtSign, Users, Mail, MessageSquare, Video, TrendingUp, Clock } from "lucide-react";
+import { Hash, AtSign, Users, Mail, MessageSquare, Video, TrendingUp, Clock, ExternalLink } from "lucide-react";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import type { Tables } from "@/types/database";
@@ -51,12 +51,25 @@ export default async function CampaignDetailPage({
   ]);
 
   const stats = [
-    { title: "키워드", value: keywordCount ?? 0, icon: Hash, color: "text-primary", bg: "bg-primary/10", href: `/campaigns/${id}/keywords` },
-    { title: "태그 계정", value: taggedCount ?? 0, icon: AtSign, color: "text-purple-500", bg: "bg-purple-500/10", href: `/campaigns/${id}/tagged` },
-    { title: "인플루언서", value: influencerCount ?? 0, icon: Users, color: "text-green-500", bg: "bg-green-500/10", href: `/campaigns/${id}/influencers` },
-    { title: "발송 이메일", value: emailCount ?? 0, icon: Mail, color: "text-orange-500", bg: "bg-orange-500/10", href: `/campaigns/${id}/email/logs` },
-    { title: "인박스", value: `${unreadCount ?? 0} / ${threadCount ?? 0}`, icon: MessageSquare, color: "text-pink-500", bg: "bg-pink-500/10", href: `/campaigns/${id}/inbox` },
-    { title: "콘텐츠", value: contentCount ?? 0, icon: Video, color: "text-red-500", bg: "bg-red-500/10", href: `/campaigns/${id}/contents` },
+    { title: "키워드", value: keywordCount ?? 0, icon: Hash, color: "text-primary", bg: "bg-primary/10", href: `/extract/keywords` },
+    { title: "태그 계정", value: taggedCount ?? 0, icon: AtSign, color: "text-purple-500", bg: "bg-purple-500/10", href: `/extract/tagged` },
+    { title: "인플루언서", value: influencerCount ?? 0, icon: Users, color: "text-green-500", bg: "bg-green-500/10", href: `/manage?campaign=${id}` },
+    { title: "발송 이메일", value: emailCount ?? 0, icon: Mail, color: "text-orange-500", bg: "bg-orange-500/10", href: `/email/logs?campaign=${id}` },
+    { title: "인박스", value: `${unreadCount ?? 0} / ${threadCount ?? 0}`, icon: MessageSquare, color: "text-pink-500", bg: "bg-pink-500/10", href: `/inbox?campaign=${id}` },
+    { title: "콘텐츠", value: contentCount ?? 0, icon: Video, color: "text-red-500", bg: "bg-red-500/10", href: `/contents?campaign=${id}` },
+  ];
+
+  // Quick links to global pages with this campaign pre-selected
+  const quickLinks = [
+    { label: "이메일 발송", href: `/email/send?campaign=${id}` },
+    { label: "발송 로그", href: `/email/logs?campaign=${id}` },
+    { label: "인박스", href: `/inbox?campaign=${id}` },
+    { label: "인플루언서 관리", href: `/manage?campaign=${id}` },
+    { label: "콘텐츠", href: `/contents?campaign=${id}` },
+    { label: "SNS 계정", href: `/sns-accounts?campaign=${id}` },
+    { label: "성과", href: `/metrics?campaign=${id}` },
+    { label: "제안서", href: `/proposals?campaign=${id}` },
+    { label: "템플릿", href: `/templates?campaign=${id}` },
   ];
 
   // Calculate status pipeline
@@ -105,6 +118,27 @@ export default async function CampaignDetailPage({
         ))}
       </div>
 
+      {/* Quick Links */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <ExternalLink className="w-4 h-4" />
+            바로가기
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex gap-2 flex-wrap">
+            {quickLinks.map((link) => (
+              <Link key={link.href} href={link.href}>
+                <Badge variant="outline" className="cursor-pointer hover:bg-accent px-3 py-1.5 text-sm">
+                  {link.label}
+                </Badge>
+              </Link>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Influencer Pipeline */}
       {(influencerCount ?? 0) > 0 && (
         <Card>
@@ -149,7 +183,7 @@ export default async function CampaignDetailPage({
                 <div key={job.id} className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
                   <div>
                     <div className="text-sm font-medium">
-                      {job.type === "keyword" ? "키워드" : "태그"} · {job.platform}
+                      {{ keyword: "키워드", tagged: "태그", enrich: "프로필 보강", email_scrape: "이메일 추출" }[job.type] ?? job.type} · {job.platform}
                     </div>
                     <div className="text-xs text-muted-foreground">
                       {job.started_at ? new Date(job.started_at).toLocaleString("ko-KR") : "-"}

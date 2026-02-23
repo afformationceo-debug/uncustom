@@ -39,3 +39,22 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# images & screenshots
+*.png
+*.jpeg
+*.jpg
+*.xlsx
+
+# CSV data files
+*.csv
+
+# playwright
+.playwright-mcp/
+
+# temp/debug
+console-errors.txt
+uidesign/
+
+# supabase temp
+supabase/.temp/
