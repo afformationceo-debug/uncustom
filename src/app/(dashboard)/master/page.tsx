@@ -1333,7 +1333,7 @@ export default function MasterPage() {
   const [importSourceFilter, setImportSourceFilter] = useState("");
   const [page, setPage] = useState(0);
   const [sortField, setSortField] = useState<SortField>("follower_count");
-  const pageSize = 100;
+  const pageSize = 50;
 
   // Stats
   const [platformCounts, setPlatformCounts] = useState<Record<string, number>>({});
@@ -1746,7 +1746,8 @@ export default function MasterPage() {
       const params = new URLSearchParams();
       params.set("platform", exportPlatform ?? platformFilter);
       if (searchQuery) params.set("search", searchQuery);
-      if (emailFilter !== "all") params.set("email", emailFilter);
+      if (emailFilter === "has") params.set("email", "with");
+      else if (emailFilter === "none") params.set("email", "without");
       if (countryFilter) params.set("country", countryFilter);
       if (verifiedFilter !== "all") params.set("verified", verifiedFilter);
       if (followerMin) params.set("follower_min", followerMin);
@@ -1766,12 +1767,38 @@ export default function MasterPage() {
   return (
     <div className="space-y-4">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
+      <div>
+        <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold">마스터 데이터</h1>
-          <p className="text-sm text-muted-foreground mt-1">모든 캠페인에서 추출된 인플루언서 통합 데이터</p>
+          {/* View mode toggle */}
+          <div className="flex items-center border rounded-md">
+            <button
+              onClick={() => setViewMode("card")}
+              className={`flex items-center gap-1 px-2.5 py-1.5 text-sm transition-colors rounded-l-md ${
+                viewMode === "card"
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:text-foreground hover:bg-muted"
+              }`}
+              title="카드 뷰"
+            >
+              <LayoutGrid className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setViewMode("table")}
+              className={`flex items-center gap-1 px-2.5 py-1.5 text-sm transition-colors rounded-r-md ${
+                viewMode === "table"
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:text-foreground hover:bg-muted"
+              }`}
+              title="테이블 뷰"
+            >
+              <Table2 className="w-4 h-4" />
+            </button>
+          </div>
         </div>
-        <div>
+
+        {/* Toolbar - Left aligned, prominent */}
+        <div className="flex items-center gap-2 mt-3 flex-wrap">
           <input
             ref={fileInputRef}
             type="file"
@@ -1788,6 +1815,7 @@ export default function MasterPage() {
             size="sm"
             onClick={() => fileInputRef.current?.click()}
             disabled={importing}
+            className="h-8 font-medium"
           >
             {importing ? (
               <Loader2 className="w-4 h-4 mr-1.5 animate-spin" />
@@ -1800,13 +1828,15 @@ export default function MasterPage() {
             variant="outline"
             size="sm"
             onClick={() => { setShowEnrichPanel(!showEnrichPanel); if (!enrichStats) fetchEnrichStats(); }}
-            className="ml-2"
+            className="h-8 font-medium"
           >
             <TrendingUp className="w-4 h-4 mr-1.5" />
             프로필 보강
           </Button>
-          <div className="border-l mx-2 h-6" />
-          <Button variant="outline" size="sm" onClick={handleCsvTemplateDownload}>
+
+          <div className="border-l h-5 mx-1" />
+
+          <Button variant="outline" size="sm" onClick={handleCsvTemplateDownload} className="h-8 font-medium">
             <FileSpreadsheet className="w-4 h-4 mr-1.5" />
             CSV 템플릿
           </Button>
@@ -1822,6 +1852,7 @@ export default function MasterPage() {
             size="sm"
             onClick={() => csvFileRef.current?.click()}
             disabled={csvImporting}
+            className="h-8 font-medium"
           >
             {csvImporting ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Upload className="w-4 h-4 mr-1.5" />}
             CSV 가져오기
@@ -1829,16 +1860,17 @@ export default function MasterPage() {
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
-                variant="outline"
+                variant="default"
                 size="sm"
                 disabled={csvExporting}
+                className="h-8 font-medium"
               >
                 {csvExporting ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Download className="w-4 h-4 mr-1.5" />}
                 CSV 내보내기
                 <ChevronDown className="w-3 h-3 ml-1" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56">
+            <DropdownMenuContent align="start" className="w-56">
               <DropdownMenuItem onClick={() => handleCsvExport(platformFilter)}>
                 <FileSpreadsheet className="w-4 h-4 mr-2" />
                 현재 플랫폼 ({PLATFORMS.find(p => p.value === platformFilter)?.label ?? platformFilter})
@@ -2159,32 +2191,6 @@ export default function MasterPage() {
         >
           초기화
         </Button>
-
-        {/* View mode toggle */}
-        <div className="flex items-center border rounded-md ml-auto">
-          <button
-            onClick={() => setViewMode("card")}
-            className={`flex items-center gap-1 px-2.5 py-1.5 text-sm transition-colors rounded-l-md ${
-              viewMode === "card"
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:text-foreground hover:bg-muted"
-            }`}
-            title="카드 뷰"
-          >
-            <LayoutGrid className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => setViewMode("table")}
-            className={`flex items-center gap-1 px-2.5 py-1.5 text-sm transition-colors rounded-r-md ${
-              viewMode === "table"
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:text-foreground hover:bg-muted"
-            }`}
-            title="테이블 뷰"
-          >
-            <Table2 className="w-4 h-4" />
-          </button>
-        </div>
       </div>
 
       {/* Selection Action Bar */}
