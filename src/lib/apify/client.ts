@@ -33,3 +33,10 @@ export async function getRunStatus(runId: string) {
   const run = await client.run(runId).get();
   return run;
 }
+
+/** Get real-time item count from a dataset (updates within ~5 seconds) */
+export async function getDatasetInfo(datasetId: string) {
+  const client = getApifyClient();
+  const info = await client.dataset(datasetId).get();
+  return info;
+}

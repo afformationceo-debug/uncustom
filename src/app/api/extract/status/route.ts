@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { getRunStatus, getDatasetItems, startActor } from "@/lib/apify/client";
+import { getRunStatus, getDatasetItems, getDatasetInfo, startActor } from "@/lib/apify/client";
 import { transformApifyItem } from "@/lib/apify/transform";
 import { extractLinksFromBio, isEmailExtractableLink } from "@/lib/utils/email-extractor";
 import { APIFY_ACTORS } from "@/lib/apify/actors";
@@ -81,10 +81,18 @@ export async function GET(request: Request) {
       return NextResponse.json({ status: "failed", error: `Apify run ${run.status}` });
     }
 
-    // Return Apify's real-time item count for RUNNING status
-    // The REST API returns stats.itemCount but the SDK types omit it
-    const runStats = run?.stats as unknown as Record<string, unknown> | undefined;
-    const itemCount = (typeof runStats?.itemCount === "number" ? runStats.itemCount : null) ?? job.total_extracted ?? 0;
+    // Get real-time item count from the dataset (not from run.stats which has no itemCount)
+    let itemCount = job.total_extracted ?? 0;
+    if (run.defaultDatasetId) {
+      try {
+        const datasetInfo = await getDatasetInfo(run.defaultDatasetId);
+        if (datasetInfo && typeof datasetInfo.itemCount === "number") {
+          itemCount = datasetInfo.itemCount;
+        }
+      } catch {
+        // Dataset info fetch failed, use existing count
+      }
+    }
     return NextResponse.json({ status: "running", total_extracted: itemCount });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Internal server error";
