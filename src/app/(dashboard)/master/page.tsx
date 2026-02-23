@@ -37,6 +37,9 @@ import {
   Clock,
   ChevronDown,
   ChevronUp,
+  ArrowUp,
+  ArrowDown,
+  ArrowUpDown,
   Globe,
   Hash,
   Tag,
@@ -73,8 +76,52 @@ type Campaign = Tables<"campaigns">;
 type InfluencerLink = Tables<"influencer_links">;
 
 type CampaignAssignmentMap = Record<string, { id: string; name: string }[]>;
-type SortField = "follower_count" | "engagement_rate" | "created_at";
+type SortField = string; // Any DB column name
+type SortDir = "asc" | "desc";
 type PlatformFilter = "instagram" | "tiktok" | "youtube" | "twitter";
+
+/** Map column key → DB column name for sorting. Keys not listed here are not sortable. */
+const COLUMN_SORT_MAP: Record<string, string> = {
+  username: "username",
+  channel: "display_name",
+  country: "country",
+  followers: "follower_count",
+  subscribers: "follower_count",
+  following: "following_count",
+  posts: "post_count",
+  videos: "post_count",
+  engagement: "engagement_rate",
+  email: "email",
+  email_source: "email_source",
+  is_verified: "is_verified",
+  is_business: "is_business",
+  category: "category",
+  external_url: "external_url",
+  avg_likes: "avg_likes",
+  avg_comments: "avg_comments",
+  avg_views: "avg_views",
+  avg_shares: "avg_shares",
+  heart_count: "heart_count",
+  total_views: "total_views",
+  share_count: "share_count",
+  language: "language",
+  location: "location",
+  source_content_created_at: "source_content_created_at",
+  content_language: "content_language",
+  video_duration: "video_duration",
+  is_private: "is_private",
+  is_sponsored: "is_sponsored",
+  product_type: "product_type",
+  bookmark_count: "bookmark_count",
+  quote_count: "quote_count",
+  favourites_count: "favourites_count",
+  listed_count: "listed_count",
+  media_count: "media_count",
+  is_blue_verified: "is_blue_verified",
+  is_monetized: "is_monetized",
+  keywords: "created_at",
+  created_at: "created_at",
+};
 
 /** Escape LIKE/ILIKE wildcard characters */
 function escapeLike(str: string): string {
@@ -111,9 +158,11 @@ const PLATFORM_BORDER_COLORS: Record<string, string> = {
 };
 
 const SORT_OPTIONS: { value: SortField; label: string }[] = [
+  { value: "created_at", label: "최신순" },
   { value: "follower_count", label: "팔로워" },
   { value: "engagement_rate", label: "참여율" },
-  { value: "created_at", label: "최신순" },
+  { value: "avg_likes", label: "평균좋아요" },
+  { value: "avg_views", label: "평균조회" },
 ];
 
 // Platform-specific column definitions
@@ -1332,7 +1381,8 @@ export default function MasterPage() {
   const [enrichedFilter, setEnrichedFilter] = useState<string>("all");
   const [importSourceFilter, setImportSourceFilter] = useState("");
   const [page, setPage] = useState(0);
-  const [sortField, setSortField] = useState<SortField>("follower_count");
+  const [sortField, setSortField] = useState<SortField>("created_at");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
   const pageSize = 50;
 
   // Stats
@@ -1401,7 +1451,7 @@ export default function MasterPage() {
 
   useEffect(() => {
     fetchInfluencers();
-  }, [platformFilter, emailFilter, page, sortField, verifiedFilter, businessFilter, enrichedFilter, countryFilter, followerMin, followerMax, categoryFilter, importSourceFilter]);
+  }, [platformFilter, emailFilter, page, sortField, sortDir, verifiedFilter, businessFilter, enrichedFilter, countryFilter, followerMin, followerMax, categoryFilter, importSourceFilter]);
 
   // Defer campaign assignments & links fetch until actually needed (expand row)
   const assignmentsFetched = useRef(false);
@@ -1425,7 +1475,7 @@ export default function MasterPage() {
       fetchInfluencers();
       fetchPlatformCounts();
     }, 2000);
-  }, [platformFilter, emailFilter, page, sortField, countryFilter, followerMin, followerMax]);
+  }, [platformFilter, emailFilter, page, sortField, sortDir, countryFilter, followerMin, followerMax]);
   useRealtime("influencers", `platform=eq.${platformFilter}`, realtimeCallback);
 
   // ---------------------------------------------------------------------------
@@ -1577,7 +1627,7 @@ export default function MasterPage() {
     else if (enrichedFilter === "unenriched") query = query.is("bio", null);
 
     query = query
-      .order(sortField, { ascending: false, nullsFirst: false })
+      .order(sortField, { ascending: sortDir === "asc", nullsFirst: false })
       .range(page * pageSize, (page + 1) * pageSize - 1);
 
     const { data, error, count } = await query;
@@ -2201,10 +2251,19 @@ export default function MasterPage() {
           </SelectTrigger>
           <SelectContent>
             {SORT_OPTIONS.map((opt) => (
-              <SelectItem key={opt.value} value={opt.value}>{opt.label}순</SelectItem>
+              <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
             ))}
           </SelectContent>
         </Select>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-9 w-9 p-0"
+          onClick={() => { setSortDir(sortDir === "desc" ? "asc" : "desc"); setPage(0); }}
+          title={sortDir === "desc" ? "내림차순 (높은→낮은)" : "오름차순 (낮은→높은)"}
+        >
+          {sortDir === "desc" ? <ArrowDown className="w-4 h-4" /> : <ArrowUp className="w-4 h-4" />}
+        </Button>
 
         <Button variant="outline" size="sm" onClick={handleSearch} className="h-9">
           검색
@@ -2215,7 +2274,7 @@ export default function MasterPage() {
           className="h-9"
           onClick={() => {
             setEmailFilter("all"); setFollowerMin(""); setFollowerMax(""); setCountryFilter("");
-            setPlatformFilter("instagram"); setSearchQuery(""); setPage(0); setSortField("follower_count");
+            setPlatformFilter("instagram"); setSearchQuery(""); setPage(0); setSortField("created_at"); setSortDir("desc");
             setVerifiedFilter("all"); setBusinessFilter("all"); setCategoryFilter("");
             setEnrichedFilter("all"); setImportSourceFilter("");
             fetchInfluencers();
@@ -2591,11 +2650,39 @@ export default function MasterPage() {
                       onCheckedChange={(checked) => handleSelectAll(!!checked)}
                     />
                   </TableHead>
-                  {columns.map((col) => (
-                    <TableHead key={col.key} className={col.width ?? ""}>
-                      {col.label}
-                    </TableHead>
-                  ))}
+                  {columns.map((col) => {
+                    const dbCol = COLUMN_SORT_MAP[col.key];
+                    const isSortable = !!dbCol;
+                    const isActive = sortField === dbCol;
+                    return (
+                      <TableHead
+                        key={col.key}
+                        className={`${col.width ?? ""} ${isSortable ? "cursor-pointer select-none hover:bg-muted/50 transition-colors" : ""}`}
+                        onClick={isSortable ? () => {
+                          if (isActive) {
+                            setSortDir(sortDir === "desc" ? "asc" : "desc");
+                          } else {
+                            setSortField(dbCol);
+                            setSortDir("desc");
+                          }
+                          setPage(0);
+                        } : undefined}
+                      >
+                        <div className="flex items-center gap-1">
+                          {col.label}
+                          {isSortable && (
+                            isActive ? (
+                              sortDir === "asc"
+                                ? <ArrowUp className="w-3 h-3 text-primary flex-shrink-0" />
+                                : <ArrowDown className="w-3 h-3 text-primary flex-shrink-0" />
+                            ) : (
+                              <ArrowUpDown className="w-3 h-3 text-muted-foreground/40 flex-shrink-0" />
+                            )
+                          )}
+                        </div>
+                      </TableHead>
+                    );
+                  })}
                   <TableHead className="w-10" />
                 </TableRow>
               </TableHeader>
