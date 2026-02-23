@@ -51,7 +51,7 @@ import { toast } from "sonner";
 import type { Tables } from "@/types/database";
 import { PLATFORMS } from "@/types/platform";
 import { useRealtime } from "@/hooks/use-realtime";
-import { PLATFORM_ADVANCED_INPUTS, type AdvancedInputField } from "@/lib/apify/actors";
+import { PLATFORM_ADVANCED_INPUTS, type AdvancedInputField, estimateKeywordCost, estimateTaggedCost, PLATFORM_KEYWORD_ACTORS, APIFY_COST_ESTIMATES } from "@/lib/apify/actors";
 
 type ExtractionJob = Tables<"extraction_jobs">;
 type Keyword = Tables<"keywords">;
@@ -536,10 +536,19 @@ export default function MasterExtractPage() {
                 <Badge variant="secondary" className="text-[10px]">{filteredKeywords.length}</Badge>
               </div>
               {filteredKeywords.length > 0 && (
-                <Button size="sm" onClick={() => startExtractAll("keyword")} disabled={extractingAll === "keyword"} className="h-8">
-                  {extractingAll === "keyword" ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : <PlayCircle className="w-3.5 h-3.5 mr-1.5" />}
-                  전체 추출
-                </Button>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-amber-600 dark:text-amber-400 font-medium">
+                    ~${(filteredKeywords.reduce((sum, kw) => {
+                      const ep = getEffectivePlatforms(kw.id, "keyword");
+                      const cfg = getConfig(kw.id);
+                      return sum + estimateKeywordCost(ep, cfg.limit);
+                    }, 0)).toFixed(2)}
+                  </span>
+                  <Button size="sm" onClick={() => startExtractAll("keyword")} disabled={extractingAll === "keyword"} className="h-8">
+                    {extractingAll === "keyword" ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : <PlayCircle className="w-3.5 h-3.5 mr-1.5" />}
+                    전체 추출
+                  </Button>
+                </div>
               )}
             </div>
             <div className="divide-y max-h-[500px] overflow-auto">
@@ -572,7 +581,10 @@ export default function MasterExtractPage() {
                           <Badge variant="outline" className="text-[9px] px-1 py-0">{kw.target_country}</Badge>
                         )}
                       </div>
-                      <div className="flex items-center gap-1 flex-shrink-0">
+                      <div className="flex items-center gap-1.5 flex-shrink-0">
+                        <span className="text-[9px] text-amber-600 dark:text-amber-400">
+                          ~${estimateKeywordCost(effectivePlatforms, config.limit).toFixed(2)}
+                        </span>
                         <Button variant="ghost" size="sm" onClick={() => toggleSettings(kw.id)} className="h-7 w-7 p-0">
                           <Settings className="w-3.5 h-3.5 text-muted-foreground" />
                         </Button>
@@ -619,10 +631,13 @@ export default function MasterExtractPage() {
                           <div className="pt-5">
                             <ArrowRight className="w-3.5 h-3.5 text-muted-foreground" />
                           </div>
-                          <div className="pt-5">
+                          <div className="pt-5 space-y-0.5">
                             <span className="text-xs text-muted-foreground">
                               예상 약 <strong className="text-foreground">{effectivePlatforms.length * config.limit}</strong>건
                             </span>
+                            <p className="text-[10px] text-amber-600 dark:text-amber-400 font-medium">
+                              ~${estimateKeywordCost(effectivePlatforms, config.limit).toFixed(2)}
+                            </p>
                           </div>
                         </div>
                         {/* Platform-specific advanced inputs */}
@@ -702,10 +717,18 @@ export default function MasterExtractPage() {
                 <Badge variant="secondary" className="text-[10px]">{filteredTagged.length}</Badge>
               </div>
               {filteredTagged.filter((a) => TAGGED_SUPPORTED_PLATFORMS.includes(a.platform)).length > 0 && (
-                <Button size="sm" onClick={() => startExtractAll("tagged")} disabled={extractingAll === "tagged"} className="h-8">
-                  {extractingAll === "tagged" ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : <PlayCircle className="w-3.5 h-3.5 mr-1.5" />}
-                  전체 추출
-                </Button>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-amber-600 dark:text-amber-400 font-medium">
+                    ~${(filteredTagged
+                      .filter((a) => TAGGED_SUPPORTED_PLATFORMS.includes(a.platform))
+                      .reduce((sum, acc) => sum + estimateTaggedCost(acc.platform, getConfig(acc.id).limit), 0)
+                    ).toFixed(2)}
+                  </span>
+                  <Button size="sm" onClick={() => startExtractAll("tagged")} disabled={extractingAll === "tagged"} className="h-8">
+                    {extractingAll === "tagged" ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : <PlayCircle className="w-3.5 h-3.5 mr-1.5" />}
+                    전체 추출
+                  </Button>
+                </div>
               )}
             </div>
             <div className="divide-y max-h-[500px] overflow-auto">
@@ -740,6 +763,9 @@ export default function MasterExtractPage() {
                           <div className="flex items-center gap-1">
                             {isSupported && (
                               <>
+                                <span className="text-[9px] text-amber-600 dark:text-amber-400">
+                                  ~${estimateTaggedCost(acc.platform, getConfig(acc.id).limit).toFixed(2)}
+                                </span>
                                 <Button variant="ghost" size="sm" onClick={() => toggleSettings(acc.id)} className="h-7 w-7 p-0">
                                   <Settings className="w-3.5 h-3.5 text-muted-foreground" />
                                 </Button>
@@ -794,8 +820,8 @@ export default function MasterExtractPage() {
                 const cfg = job.input_config as Record<string, unknown> | null;
                 const limit = Number(cfg?.resultsLimit ?? cfg?.resultsPerPage ?? cfg?.maxResults ?? cfg?.maxItems ?? 0);
                 const progress = limit > 0 && extracted > 0 ? Math.min((extracted / limit) * 100, 100) : 0;
-                const typeLabels: Record<string, string> = { keyword: "키워드 추출", tagged: "태그 추출", enrich: "프로필 보강", email_scrape: "이메일 추출", email_social: "소셜 이메일" };
-                const typeIcons: Record<string, typeof Zap> = { keyword: SearchIcon, tagged: AtSign, enrich: Sparkles, email_scrape: Zap, email_social: Zap };
+                const typeLabels: Record<string, string> = { keyword: "키워드 추출", tagged: "태그 추출", enrich: "프로필 보강", email_scrape: "이메일 추출" };
+                const typeIcons: Record<string, typeof Zap> = { keyword: SearchIcon, tagged: AtSign, enrich: Sparkles, email_scrape: Zap };
                 const TypeIcon = typeIcons[job.type] ?? Zap;
 
                 return (
@@ -958,7 +984,6 @@ export default function MasterExtractPage() {
                           tagged: { label: "태그", color: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300" },
                           enrich: { label: "보강", color: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300" },
                           email_scrape: { label: "이메일", color: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300" },
-                          email_social: { label: "소셜이메일", color: "bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300" },
                         };
                         const typeInfo = typeLabels[job.type] ?? { label: job.type, color: "bg-muted text-muted-foreground" };
 

@@ -370,7 +370,7 @@ function transformYoutube(item: Record<string, unknown>): Partial<TransformedInf
       return isNaN(d.getTime()) ? null : d.toISOString();
     })(),
     is_monetized: item.isMonetized === true ? true : item.isMonetized === false ? false : null,
-    external_url: channelUrl ? String(channelUrl) : null,
+    external_url: null, // YouTube channelUrl is the channel itself, not an external link
     location: (item.country ?? null) as string | null,
     avg_likes: likeCount,
     avg_comments: ytCommentCount,

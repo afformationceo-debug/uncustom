@@ -206,3 +206,40 @@ export function getDefaultInput(
       return {};
   }
 }
+
+// Approximate Apify cost per result (USD)
+// perRun: base cost per actor run, perResult: cost per scraped item
+export const APIFY_COST_ESTIMATES: Record<string, { perRun: number; perResult: number }> = {
+  [APIFY_ACTORS.INSTAGRAM_HASHTAG]: { perRun: 0.01, perResult: 0.004 },
+  [APIFY_ACTORS.INSTAGRAM_REEL]: { perRun: 0.01, perResult: 0.004 },
+  [APIFY_ACTORS.INSTAGRAM_TAGGED]: { perRun: 0.01, perResult: 0.004 },
+  [APIFY_ACTORS.INSTAGRAM_PROFILE]: { perRun: 0.01, perResult: 0.003 },
+  [APIFY_ACTORS.TIKTOK]: { perRun: 0.01, perResult: 0.002 },
+  [APIFY_ACTORS.YOUTUBE]: { perRun: 0.01, perResult: 0.004 },
+  [APIFY_ACTORS.TWITTER]: { perRun: 0.01, perResult: 0.003 },
+  [APIFY_ACTORS.EMAIL_EXTRACTOR]: { perRun: 0.005, perResult: 0.002 },
+};
+
+/** Estimate Apify cost for a given actor and result count */
+export function estimateApifyCost(actorId: string, resultCount: number): number {
+  const est = APIFY_COST_ESTIMATES[actorId];
+  if (!est) return 0;
+  return est.perRun + est.perResult * resultCount;
+}
+
+/** Estimate total cost for keyword extraction across multiple platforms */
+export function estimateKeywordCost(platforms: string[], limitPerPlatform: number): number {
+  let total = 0;
+  for (const platform of platforms) {
+    const actorId = PLATFORM_KEYWORD_ACTORS[platform];
+    if (actorId) total += estimateApifyCost(actorId, limitPerPlatform);
+  }
+  return total;
+}
+
+/** Estimate total cost for tagged extraction */
+export function estimateTaggedCost(platform: string, limit: number): number {
+  const actorId = PLATFORM_TAGGED_ACTORS[platform];
+  if (!actorId) return 0;
+  return estimateApifyCost(actorId, limit);
+}

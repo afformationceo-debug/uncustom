@@ -35,11 +35,24 @@ const BIO_LINK_DOMAINS = [
 ];
 
 const SKIP_DOMAINS = [
+  // SNS
   "youtube.com", "youtu.be", "tiktok.com", "twitter.com", "x.com",
-  "instagram.com", "facebook.com", "amazon.com", "amzn.to",
-  "amazon.co.jp", "amazon.co.uk", "rakuten.co.jp", "shopee",
-  "lazada", "qoo10", "coupang.com", "naver.com", "google.com",
-  "apple.com", "spotify.com", "music.apple.com", "open.spotify.com",
+  "instagram.com", "facebook.com", "threads.net", "snapchat.com", "pinterest.com",
+  // Messenger (no email on these)
+  "line.me", "lin.ee", "liff.line.me",
+  "wa.me", "whatsapp.com", "api.whatsapp.com",
+  "t.me", "telegram.org",
+  "m.me",
+  "discord.gg", "discord.com",
+  "kakao.com", "open.kakao.com", "pf.kakao.com",
+  "wechat.com", "weixin.qq.com",
+  "signal.org",
+  // Shopping / platforms
+  "amazon.com", "amzn.to", "amazon.co.jp", "amazon.co.uk",
+  "rakuten.co.jp", "shopee", "lazada", "qoo10", "coupang.com",
+  "naver.com", "google.com", "apple.com",
+  // Music / streaming
+  "spotify.com", "music.apple.com", "open.spotify.com", "soundcloud.com",
 ];
 
 export function isLinktreeOrBioLink(url: string): boolean {
