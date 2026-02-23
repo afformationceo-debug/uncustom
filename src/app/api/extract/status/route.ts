@@ -501,12 +501,12 @@ async function handleExtractionResults(
     }
   }
 
-  // Auto-trigger web email extraction (scrape external_url / profile links for emails)
+  // Auto-trigger batch email extraction (all platforms, all unscraped links in one run)
   let emailJobId: string | null = null;
   try {
-    emailJobId = await autoTriggerWebEmailExtraction(supabase, job.platform, job.campaign_id);
+    emailJobId = await autoTriggerBatchEmailExtraction(supabase, job.campaign_id);
   } catch (err) {
-    console.error("[extract/status] Auto web email extraction error:", err);
+    console.error("[extract/status] Auto batch email extraction error:", err);
   }
 
   return NextResponse.json({
@@ -586,12 +586,12 @@ async function handleEnrichmentResults(
     })
     .eq("id", jobId);
 
-  // Auto-trigger email batch extraction for unscraped bio-links
+  // Auto-trigger batch email extraction (all unscraped links in one run)
   let emailScrapeJobId: string | null = null;
   try {
-    emailScrapeJobId = await autoTriggerEmailExtraction(supabase, job.campaign_id);
+    emailScrapeJobId = await autoTriggerBatchEmailExtraction(supabase, job.campaign_id);
   } catch (err) {
-    console.error("[extract/status] Auto email extraction trigger error:", err);
+    console.error("[extract/status] Auto batch email extraction error:", err);
   }
 
   return NextResponse.json({
@@ -949,15 +949,16 @@ async function autoTriggerGlobalEnrichment(
 }
 
 /**
- * Auto-trigger email extraction for unscraped bio-links after enrichment
- * Batches URLs in groups of 200 to prevent Apify timeout
+ * Unified batch email extraction: collects ALL unscraped links + external_url from influencers
+ * without email across ALL platforms, then runs ONE Apify batch.
+ * Replaces both autoTriggerEmailExtraction and autoTriggerWebEmailExtraction.
  */
-async function autoTriggerEmailExtraction(
+async function autoTriggerBatchEmailExtraction(
   supabase: Awaited<ReturnType<typeof createClient>>,
   campaignId: string | null,
 ): Promise<string | null> {
   try {
-    // Check if there's already a running email_scrape job
+    // Check if there's already ANY running email_scrape job (global check, not per-platform)
     const existingQuery = supabase
       .from("extraction_jobs")
       .select("id")
@@ -973,31 +974,88 @@ async function autoTriggerEmailExtraction(
 
     const { data: existingJob } = await existingQuery;
     if (existingJob && existingJob.length > 0) {
-      console.log("[extract/status] Email scrape already running");
+      console.log("[extract/status] Email scrape already running, skipping");
       return null;
     }
 
-    // Find unscraped bio-links (limit 200 to prevent timeout)
-    const { data: links } = await supabase
+    // Step 1: Find ALL influencers without email that have external_url (across ALL platforms)
+    let infQuery = supabase
+      .from("influencers")
+      .select("id, external_url, profile_url")
+      .is("email", null)
+      .limit(300);
+
+    if (campaignId) {
+      const { data: ciData } = await supabase
+        .from("campaign_influencers")
+        .select("influencer_id")
+        .eq("campaign_id", campaignId);
+      if (ciData && ciData.length > 0) {
+        infQuery = infQuery.in("id", ciData.map((ci) => ci.influencer_id));
+      }
+    }
+
+    const { data: noEmailInfs } = await infQuery;
+    const typedInfs = (noEmailInfs ?? []) as { id: string; external_url: string | null; profile_url: string | null }[];
+
+    // Step 2: Register external_url/profile_url as influencer_links (for result matching)
+    const linkMap: Record<string, { link_id: string; influencer_id: string }> = {};
+    const urlsToScrape: string[] = [];
+
+    for (const inf of typedInfs) {
+      const urls: string[] = [];
+      if (inf.external_url && inf.external_url.startsWith("http")) urls.push(inf.external_url);
+      if (inf.profile_url && inf.profile_url.startsWith("http")) urls.push(inf.profile_url);
+
+      for (const url of urls) {
+        if (!isEmailExtractableLink(url)) continue;
+        const { data: linkData } = await supabase
+          .from("influencer_links")
+          .upsert(
+            { influencer_id: inf.id, url, scraped: false },
+            { onConflict: "influencer_id,url" }
+          )
+          .select("id, scraped")
+          .single();
+
+        if (linkData && !linkData.scraped && !linkMap[url]) {
+          urlsToScrape.push(url);
+          linkMap[url] = { link_id: linkData.id, influencer_id: inf.id };
+        }
+      }
+    }
+
+    // Step 3: Also collect ALL existing unscraped influencer_links
+    const { data: existingLinks } = await supabase
       .from("influencer_links")
       .select("id, influencer_id, url")
       .eq("scraped", false)
-      .limit(200);
+      .limit(300);
 
-    if (!links || links.length === 0) {
-      console.log("[extract/status] No unscraped bio-links for email extraction");
+    if (existingLinks) {
+      for (const link of existingLinks) {
+        if (!linkMap[link.url] && isEmailExtractableLink(link.url)) {
+          urlsToScrape.push(link.url);
+          linkMap[link.url] = { link_id: link.id, influencer_id: link.influencer_id };
+        }
+      }
+    }
+
+    if (urlsToScrape.length === 0) {
+      console.log("[extract/status] No URLs to scrape for batch email extraction");
       return null;
     }
 
-    // Build URL list and link map
-    const urls: string[] = [];
-    const linkMap: Record<string, { link_id: string; influencer_id: string }> = {};
-    for (const link of links) {
-      urls.push(link.url);
-      linkMap[link.url] = { link_id: link.id, influencer_id: link.influencer_id };
+    // Step 4: Limit to 200 URLs per batch and create ONE job
+    const batchUrls = urlsToScrape.slice(0, 200);
+    const batchLinkMap: Record<string, { link_id: string; influencer_id: string }> = {};
+    for (const url of batchUrls) {
+      if (linkMap[url]) batchLinkMap[url] = linkMap[url];
     }
 
-    // Create email_scrape job
+    const uniqueInfluencers = new Set(Object.values(batchLinkMap).map((m) => m.influencer_id));
+    console.log(`[extract/status] Batch email extraction: ${batchUrls.length} URLs from ${uniqueInfluencers.size} influencers`);
+
     const { data: jobData, error: jobError } = await supabase
       .from("extraction_jobs")
       .insert({
@@ -1006,9 +1064,10 @@ async function autoTriggerEmailExtraction(
         platform: "all",
         status: "running",
         input_config: {
-          urls,
-          link_map: linkMap,
-          total_links: links.length,
+          urls: batchUrls,
+          link_map: batchLinkMap,
+          total_links: batchUrls.length,
+          total_influencers: uniqueInfluencers.size,
           auto_triggered: true,
         } as unknown as Json,
         started_at: new Date().toISOString(),
@@ -1017,27 +1076,36 @@ async function autoTriggerEmailExtraction(
       .single();
 
     if (jobError || !jobData) {
-      console.error("[extract/status] Failed to create email scrape job:", jobError?.message);
+      console.error("[extract/status] Failed to create batch email job:", jobError?.message);
       return null;
     }
 
-    // Start EMAIL_EXTRACTOR (vdrmota/contact-info-scraper) with startUrls format
-    const run = await startActor(APIFY_ACTORS.EMAIL_EXTRACTOR, {
-      startUrls: urls.map(url => ({ url })),
-      maxDepth: 1,
-      maxRequestsPerStartUrl: 5,
-      sameDomain: true,
-    });
+    // Step 5: Start ONE Apify run with ALL URLs
+    try {
+      const run = await startActor(APIFY_ACTORS.EMAIL_EXTRACTOR, {
+        startUrls: batchUrls.map(url => ({ url })),
+        maxDepth: 1,
+        maxRequestsPerStartUrl: 5,
+        sameDomain: true,
+      });
 
-    await supabase
-      .from("extraction_jobs")
-      .update({ apify_run_id: run.id })
-      .eq("id", jobData.id);
+      await supabase
+        .from("extraction_jobs")
+        .update({ apify_run_id: run.id })
+        .eq("id", jobData.id);
 
-    console.log(`[extract/status] Auto email extraction started: ${jobData.id} (${links.length} URLs, Apify run: ${run.id})`);
-    return jobData.id;
+      console.log(`[extract/status] Batch email job started: ${jobData.id} (${batchUrls.length} URLs, ${uniqueInfluencers.size} influencers, Apify run: ${run.id})`);
+      return jobData.id;
+    } catch (startErr) {
+      console.error("[extract/status] Failed to start EMAIL_EXTRACTOR:", startErr);
+      await supabase
+        .from("extraction_jobs")
+        .update({ status: "failed", completed_at: new Date().toISOString() })
+        .eq("id", jobData.id);
+      return null;
+    }
   } catch (err) {
-    console.error("[extract/status] Auto email extraction error:", err);
+    console.error("[extract/status] Auto batch email extraction error:", err);
     return null;
   }
 }
@@ -1220,172 +1288,5 @@ async function handleEmailScrapeResults(
   });
 }
 
-/**
- * Auto-trigger web-based email extraction using EMAIL_EXTRACTOR (linktree/bio link scraper)
- * Collects external_url and profile_url from influencers without email,
- * registers them as influencer_links, and batch-scrapes all URLs in a single Apify run.
- */
-async function autoTriggerWebEmailExtraction(
-  supabase: Awaited<ReturnType<typeof createClient>>,
-  platform: string,
-  campaignId: string | null,
-): Promise<string | null> {
-  try {
-    // Check if there's already a running email scrape job for this platform
-    const existingQuery = supabase
-      .from("extraction_jobs")
-      .select("id")
-      .eq("type", "email_scrape")
-      .eq("platform", platform)
-      .in("status", ["running", "pending"])
-      .limit(1);
-
-    if (campaignId) {
-      existingQuery.eq("campaign_id", campaignId);
-    } else {
-      existingQuery.is("campaign_id", null);
-    }
-
-    const { data: existingJob } = await existingQuery;
-    if (existingJob && existingJob.length > 0) {
-      console.log("[extract/status] Web email extraction already running for", platform);
-      return null;
-    }
-
-    // Find influencers without email that have external_url or profile_url
-    let infQuery = supabase
-      .from("influencers")
-      .select("id, external_url, profile_url")
-      .eq("platform", platform)
-      .is("email", null)
-      .limit(200);
-
-    // If campaign-scoped, filter by campaign_influencers
-    if (campaignId) {
-      const { data: ciData } = await supabase
-        .from("campaign_influencers")
-        .select("influencer_id")
-        .eq("campaign_id", campaignId);
-      if (!ciData || ciData.length === 0) return null;
-      const infIds = ciData.map((ci) => ci.influencer_id);
-      infQuery = infQuery.in("id", infIds);
-    }
-
-    const { data: noEmailInfs } = await infQuery;
-    if (!noEmailInfs || noEmailInfs.length === 0) {
-      console.log(`[extract/status] No ${platform} influencers without email`);
-      return null;
-    }
-
-    // Collect URLs and register as influencer_links (for result matching)
-    const urlsToScrape: string[] = [];
-    const linkMap: Record<string, { link_id: string; influencer_id: string }> = {};
-    const typedInfs = noEmailInfs as { id: string; external_url: string | null; profile_url: string | null }[];
-
-    for (const inf of typedInfs) {
-      const urls: string[] = [];
-      if (inf.external_url && inf.external_url.startsWith("http")) urls.push(inf.external_url);
-      if (inf.profile_url && inf.profile_url.startsWith("http")) urls.push(inf.profile_url);
-
-      for (const url of urls) {
-        // Upsert into influencer_links (avoid dupes)
-        const { data: linkData } = await supabase
-          .from("influencer_links")
-          .upsert(
-            { influencer_id: inf.id, url, scraped: false },
-            { onConflict: "influencer_id,url" }
-          )
-          .select("id, scraped")
-          .single();
-
-        if (linkData && !linkData.scraped) {
-          urlsToScrape.push(url);
-          linkMap[url] = { link_id: linkData.id, influencer_id: inf.id };
-        }
-      }
-    }
-
-    // Also check existing unscraped links for these influencers
-    const infIds = typedInfs.map((inf) => inf.id);
-    const { data: existingLinks } = await supabase
-      .from("influencer_links")
-      .select("id, influencer_id, url")
-      .in("influencer_id", infIds)
-      .eq("scraped", false);
-
-    if (existingLinks) {
-      for (const link of existingLinks) {
-        if (!linkMap[link.url]) {
-          urlsToScrape.push(link.url);
-          linkMap[link.url] = { link_id: link.id, influencer_id: link.influencer_id };
-        }
-      }
-    }
-
-    if (urlsToScrape.length === 0) {
-      console.log(`[extract/status] No URLs to scrape for ${platform} email extraction`);
-      return null;
-    }
-
-    // Limit to 200 URLs per batch
-    const batchUrls = urlsToScrape.slice(0, 200);
-    const batchLinkMap: Record<string, { link_id: string; influencer_id: string }> = {};
-    for (const url of batchUrls) {
-      if (linkMap[url]) batchLinkMap[url] = linkMap[url];
-    }
-
-    console.log(`[extract/status] Auto-triggering web email extraction: ${batchUrls.length} URLs for ${platform}`);
-
-    // Create job record (type=email_scrape, reuses handleEmailScrapeResults)
-    const { data: jobData, error: jobError } = await supabase
-      .from("extraction_jobs")
-      .insert({
-        campaign_id: campaignId,
-        type: "email_scrape",
-        platform,
-        status: "running",
-        input_config: {
-          urls: batchUrls,
-          link_map: batchLinkMap,
-          total_links: batchUrls.length,
-          total_influencers: infIds.length,
-        } as unknown as Json,
-        started_at: new Date().toISOString(),
-      })
-      .select("id")
-      .single();
-
-    if (jobError || !jobData) {
-      console.error("[extract/status] Failed to create web email job:", jobError?.message);
-      return null;
-    }
-
-    // Start EMAIL_EXTRACTOR (vdrmota/contact-info-scraper) with all URLs in a single batch run
-    try {
-      const run = await startActor(APIFY_ACTORS.EMAIL_EXTRACTOR, {
-        startUrls: batchUrls.map(url => ({ url })),
-        maxDepth: 1,
-        maxRequestsPerStartUrl: 5,
-        sameDomain: true,
-      });
-
-      await supabase
-        .from("extraction_jobs")
-        .update({ apify_run_id: run.id })
-        .eq("id", jobData.id);
-
-      console.log(`[extract/status] Web email job started: ${jobData.id} (Apify run: ${run.id}, ${batchUrls.length} URLs)`);
-      return jobData.id;
-    } catch (startErr) {
-      console.error("[extract/status] Failed to start EMAIL_EXTRACTOR:", startErr);
-      await supabase
-        .from("extraction_jobs")
-        .update({ status: "failed", completed_at: new Date().toISOString() })
-        .eq("id", jobData.id);
-      return null;
-    }
-  } catch (err) {
-    console.error("[extract/status] Auto web email extraction error:", err);
-    return null;
-  }
-}
+// autoTriggerWebEmailExtraction and autoTriggerEmailExtraction have been replaced by
+// autoTriggerBatchEmailExtraction above — single unified batch function for all platforms.
