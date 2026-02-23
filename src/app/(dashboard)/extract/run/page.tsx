@@ -161,13 +161,18 @@ export default function MasterExtractPage() {
 
   const handleRealtimeUpdate = useCallback(
     (payload: { eventType: string; new: unknown }) => {
+      const record = payload.new as ExtractionJob;
+      if (!record?.id) return; // Guard against empty payloads
       if (payload.eventType === "INSERT") {
-        setJobs((prev) => [payload.new as ExtractionJob, ...prev]);
+        setJobs((prev) => {
+          // Deduplicate: skip if already exists
+          if (prev.some((j) => j.id === record.id)) return prev;
+          return [record, ...prev];
+        });
       } else if (payload.eventType === "UPDATE") {
-        const updated = payload.new as ExtractionJob;
-        setJobs((prev) => prev.map((j) => (j.id === updated.id ? updated : j)));
-        if (updated.status === "completed" || updated.status === "failed") {
-          stopPolling(updated.id);
+        setJobs((prev) => prev.map((j) => (j.id === record.id ? record : j)));
+        if (record.status === "completed" || record.status === "failed") {
+          stopPolling(record.id);
         }
       }
     },
@@ -822,8 +827,8 @@ export default function MasterExtractPage() {
                     </p>
                   </TableCell>
                 </TableRow>
-              ) : filteredJobs.slice(0, 50).map((job) => (
-                <TableRow key={job.id}>
+              ) : filteredJobs.slice(0, 50).map((job, idx) => (
+                <TableRow key={job.id || `job-${idx}`}>
                   <TableCell>
                     <Badge variant="outline" className="text-[10px]">
                       {{ keyword: "키워드", tagged: "태그", enrich: "보강", email_scrape: "이메일", email_social: "소셜이메일" }[job.type] ?? job.type}
