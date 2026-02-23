@@ -43,7 +43,7 @@ export async function POST(request: Request) {
     } else if (type === "tagged") {
       const { data: account } = await supabase
         .from("tagged_accounts")
-        .select("account_username, platform")
+        .select("account_username, platform, target_country")
         .eq("id", source_id)
         .single();
       if (!account) {
@@ -77,7 +77,7 @@ export async function POST(request: Request) {
       } else if (type === "tagged") {
         actorId = PLATFORM_TAGGED_ACTORS[plat];
         if (!actorId) {
-          errors.push({ platform: plat, error: `No tagged actor for ${plat} (currently Instagram only)` });
+          errors.push({ platform: plat, error: `No tagged actor for ${plat}` });
           continue;
         }
         const advInputs = platform_inputs?.[plat] as Record<string, unknown> | undefined;
