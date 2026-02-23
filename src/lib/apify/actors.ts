@@ -243,3 +243,28 @@ export function estimateTaggedCost(platform: string, limit: number): number {
   if (!actorId) return 0;
   return estimateApifyCost(actorId, limit);
 }
+
+/** Estimate full pipeline cost breakdown (extraction + IG enrichment + email extraction) */
+export function estimatePipelineCost(
+  platforms: string[],
+  limitPerPlatform: number,
+  sourceCount: number
+): { extraction: number; enrichment: number; email: number; total: number } {
+  const extraction = estimateKeywordCost(platforms, limitPerPlatform) * sourceCount;
+
+  // IG profile enrichment: only if instagram is selected
+  const hasIG = platforms.includes("instagram");
+  const igCount = hasIG ? limitPerPlatform * sourceCount : 0;
+  const enrichment = hasIG
+    ? estimateApifyCost(APIFY_ACTORS.INSTAGRAM_PROFILE, igCount)
+    : 0;
+
+  // Email extraction: ~30% of all extracted influencers have external links
+  const totalExtracted = platforms.length * limitPerPlatform * sourceCount;
+  const estimatedWithLinks = Math.round(totalExtracted * 0.3);
+  const email = estimatedWithLinks > 0
+    ? estimateApifyCost(APIFY_ACTORS.EMAIL_EXTRACTOR, estimatedWithLinks)
+    : 0;
+
+  return { extraction, enrichment, email, total: extraction + enrichment + email };
+}

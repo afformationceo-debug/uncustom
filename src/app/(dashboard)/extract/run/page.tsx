@@ -51,7 +51,7 @@ import { toast } from "sonner";
 import type { Tables } from "@/types/database";
 import { PLATFORMS } from "@/types/platform";
 import { useRealtime } from "@/hooks/use-realtime";
-import { PLATFORM_ADVANCED_INPUTS, type AdvancedInputField, estimateKeywordCost, estimateTaggedCost, PLATFORM_KEYWORD_ACTORS, APIFY_COST_ESTIMATES } from "@/lib/apify/actors";
+import { PLATFORM_ADVANCED_INPUTS, type AdvancedInputField, estimateKeywordCost, estimateTaggedCost, estimatePipelineCost, PLATFORM_KEYWORD_ACTORS, APIFY_COST_ESTIMATES } from "@/lib/apify/actors";
 
 type ExtractionJob = Tables<"extraction_jobs">;
 type Keyword = Tables<"keywords">;
@@ -496,20 +496,51 @@ export default function MasterExtractPage() {
               );
             })}
           </div>
-          {/* Pipeline visualization */}
-          <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground bg-muted/40 rounded-lg px-3 py-2">
-            <Sparkles className="w-3.5 h-3.5 text-primary flex-shrink-0" />
-            <span>파이프라인:</span>
-            <span className="font-medium text-foreground">추출</span>
-            <ArrowRight className="w-3 h-3" />
-            {globalPlatforms.includes("instagram") && (
-              <>
-                <span className="text-pink-600 dark:text-pink-400 font-medium">[IG] 프로필 보강</span>
-                <ArrowRight className="w-3 h-3" />
-              </>
-            )}
-            <span className="text-purple-600 dark:text-purple-400 font-medium">[전체] 이메일 추출</span>
-          </div>
+          {/* Pipeline visualization + cost breakdown */}
+          {(() => {
+            const sourceCount = Math.max(filteredKeywords.length, 1);
+            const defaultLimit = 200;
+            const pipeline = estimatePipelineCost(globalPlatforms, defaultLimit, sourceCount);
+            const hasIG = globalPlatforms.includes("instagram");
+            return (
+              <div className="mt-3 bg-muted/40 rounded-lg px-3 py-2.5 space-y-2">
+                {/* Pipeline flow */}
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Sparkles className="w-3.5 h-3.5 text-primary flex-shrink-0" />
+                  <span>파이프라인:</span>
+                  <span className="font-medium text-foreground">추출</span>
+                  <ArrowRight className="w-3 h-3" />
+                  {hasIG && (
+                    <>
+                      <span className="text-pink-600 dark:text-pink-400 font-medium">[IG] 프로필 보강</span>
+                      <ArrowRight className="w-3 h-3" />
+                    </>
+                  )}
+                  <span className="text-purple-600 dark:text-purple-400 font-medium">[전체] 이메일 추출</span>
+                </div>
+                {/* Cost breakdown */}
+                {sourceCount > 0 && (
+                  <div className="flex items-start gap-4 text-[10px] text-muted-foreground pl-5 border-t border-border/40 pt-2">
+                    <div className="space-y-0.5">
+                      <span className="block">├ 추출 (키워드×플랫폼): <span className="text-amber-600 dark:text-amber-400 font-medium">~${pipeline.extraction.toFixed(2)}</span></span>
+                      {hasIG && (
+                        <span className="block">├ IG 프로필 보강: <span className="text-amber-600 dark:text-amber-400 font-medium">~${pipeline.enrichment.toFixed(2)}</span></span>
+                      )}
+                      <span className="block">├ 이메일 추출 (~30%): <span className="text-amber-600 dark:text-amber-400 font-medium">~${pipeline.email.toFixed(2)}</span></span>
+                    </div>
+                    <div className="ml-auto flex-shrink-0 text-right">
+                      <span className="text-xs font-semibold text-amber-600 dark:text-amber-400">
+                        총 ~${pipeline.total.toFixed(2)}
+                      </span>
+                      <span className="block text-[9px] text-muted-foreground">
+                        소스 {sourceCount}개 × {defaultLimit}건 기준
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
         </CardContent>
       </Card>
 
