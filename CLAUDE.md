@@ -80,14 +80,20 @@ Supabase 실시간 동기화로 프론트엔드에 즉시 반영.
     → 팔로워수, 바이오, 이메일, 프로필사진 등 보강
 ```
 
-### 웹 기반 이메일 추출 플로우
+### 웹 기반 이메일 추출 플로우 (CRITICAL: 비용 관리)
 ```
-모든 플랫폼 추출 완료 → autoTriggerWebEmailExtraction() 자동 트리거
-  → email이 null인 인플루언서 최대 200명 수집
-  → external_url + profile_url + bio links 수집
-  → vdrmota/contact-info-scraper 실행 (URL 기반, maxDepth: 1)
-  → Linktree, Littly, Beacons, 개인 웹사이트 등 모든 URL 지원
+추출/보강 완료 → autoTriggerBatchEmailExtraction(supabase, campaignId, influencerIds)
+  ★ MUST: influencerIds 파라미터로 이번 추출/보강된 인플루언서 ID만 전달
+  ★ NEVER: DB 전체 인플루언서를 대상으로 스크래핑하면 비용 폭증
+  → 해당 influencer_ids의 unscraped links만 수집
+  → isEmailExtractableLink()로 SNS/메신저 URL 필터링
+  → vdrmota/contact-info-scraper 실행 (maxRequestsPerStartUrl: 2, maxDepth: 1)
   → 이메일 발견 시 influencers.email 업데이트 (email_source: "{domain}:{url}")
+
+비용 최적화 원칙:
+  - maxRequestsPerStartUrl: 2 (절대 5 이상 사용 금지 - 비용 2.5배 증가)
+  - 이번 추출 인플루언서 ID만 전달 (글로벌 스캔 금지)
+  - 예: 200건 추출 → 60명 고유 → 10명 링크 보유 → 10개 URL만 스크래핑
 ```
 
 ## 프로젝트 구조

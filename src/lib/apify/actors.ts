@@ -203,7 +203,7 @@ export function getDefaultInput(
       return {
         startUrls: [],
         maxDepth: 1,
-        maxRequestsPerStartUrl: 5,
+        maxRequestsPerStartUrl: 2,
         sameDomain: true,
       };
     default:
