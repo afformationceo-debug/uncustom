@@ -10,6 +10,7 @@ export const APIFY_ACTORS = {
 
   // YouTube
   YOUTUBE: "streamers/youtube-scraper",
+  YOUTUBE_EMAIL: "endspec/youtube-channel-contacts-extractor",
 
   // Twitter/X
   TWITTER: "apidojo/tweet-scraper",
@@ -206,6 +207,10 @@ export function getDefaultInput(
         maxRequestsPerStartUrl: 2,
         sameDomain: true,
       };
+    case APIFY_ACTORS.YOUTUBE_EMAIL:
+      return {
+        channelHandle: username ? `@${username}` : "",
+      };
     default:
       return {};
   }
@@ -222,6 +227,7 @@ export const APIFY_COST_ESTIMATES: Record<string, { perRun: number; perResult: n
   [APIFY_ACTORS.YOUTUBE]: { perRun: 0.01, perResult: 0.004 },
   [APIFY_ACTORS.TWITTER]: { perRun: 0.01, perResult: 0.003 },
   [APIFY_ACTORS.EMAIL_EXTRACTOR]: { perRun: 0.005, perResult: 0.002 },
+  [APIFY_ACTORS.YOUTUBE_EMAIL]: { perRun: 0, perResult: 0.005 },
 };
 
 /** Estimate Apify cost for a given actor and result count */
@@ -251,14 +257,16 @@ export function estimateTaggedCost(platform: string, limit: number): number {
 /** Estimate full pipeline cost for tagged extraction across multiple accounts */
 export function estimateTaggedPipelineCost(
   accounts: { platform: string; limit: number }[]
-): { extraction: number; enrichment: number; email: number; total: number } {
+): { extraction: number; enrichment: number; email: number; youtubeEmail: number; total: number } {
   let extraction = 0;
   let igCount = 0;
+  let ytCount = 0;
 
   for (const acc of accounts) {
     const actorId = PLATFORM_TAGGED_ACTORS[acc.platform];
     if (actorId) extraction += estimateApifyCost(actorId, acc.limit);
     if (acc.platform === "instagram") igCount += acc.limit;
+    if (acc.platform === "youtube") ytCount += acc.limit;
   }
 
   // IG profile enrichment
@@ -266,22 +274,27 @@ export function estimateTaggedPipelineCost(
     ? estimateApifyCost(APIFY_ACTORS.INSTAGRAM_PROFILE, igCount)
     : 0;
 
-  // Email extraction: ~30% of all extracted influencers have external links
-  const totalExtracted = accounts.reduce((sum, a) => sum + a.limit, 0);
-  const estimatedWithLinks = Math.round(totalExtracted * 0.3);
+  // Email extraction: ~30% of non-YouTube extracted influencers have external links
+  const nonYtExtracted = accounts.filter(a => a.platform !== "youtube").reduce((sum, a) => sum + a.limit, 0);
+  const estimatedWithLinks = Math.round(nonYtExtracted * 0.3);
   const email = estimatedWithLinks > 0
     ? estimateApifyCost(APIFY_ACTORS.EMAIL_EXTRACTOR, estimatedWithLinks)
     : 0;
 
-  return { extraction, enrichment, email, total: extraction + enrichment + email };
+  // YouTube email extraction: endspec actor
+  const youtubeEmail = ytCount > 0
+    ? estimateApifyCost(APIFY_ACTORS.YOUTUBE_EMAIL, ytCount)
+    : 0;
+
+  return { extraction, enrichment, email, youtubeEmail, total: extraction + enrichment + email + youtubeEmail };
 }
 
-/** Estimate full pipeline cost breakdown (extraction + IG enrichment + email extraction) */
+/** Estimate full pipeline cost breakdown (extraction + IG enrichment + email extraction + YT email) */
 export function estimatePipelineCost(
   platforms: string[],
   limitPerPlatform: number,
   sourceCount: number
-): { extraction: number; enrichment: number; email: number; total: number } {
+): { extraction: number; enrichment: number; email: number; youtubeEmail: number; total: number } {
   const extraction = estimateKeywordCost(platforms, limitPerPlatform) * sourceCount;
 
   // IG profile enrichment: only if instagram is selected
@@ -291,12 +304,20 @@ export function estimatePipelineCost(
     ? estimateApifyCost(APIFY_ACTORS.INSTAGRAM_PROFILE, igCount)
     : 0;
 
-  // Email extraction: ~30% of all extracted influencers have external links
-  const totalExtracted = platforms.length * limitPerPlatform * sourceCount;
-  const estimatedWithLinks = Math.round(totalExtracted * 0.3);
+  // Email extraction: ~30% of non-YouTube extracted influencers have external links
+  const nonYtPlatforms = platforms.filter(p => p !== "youtube");
+  const nonYtExtracted = nonYtPlatforms.length * limitPerPlatform * sourceCount;
+  const estimatedWithLinks = Math.round(nonYtExtracted * 0.3);
   const email = estimatedWithLinks > 0
     ? estimateApifyCost(APIFY_ACTORS.EMAIL_EXTRACTOR, estimatedWithLinks)
     : 0;
 
-  return { extraction, enrichment, email, total: extraction + enrichment + email };
+  // YouTube email extraction: endspec actor for CAPTCHA-protected business emails
+  const hasYT = platforms.includes("youtube");
+  const ytCount = hasYT ? limitPerPlatform * sourceCount : 0;
+  const youtubeEmail = ytCount > 0
+    ? estimateApifyCost(APIFY_ACTORS.YOUTUBE_EMAIL, ytCount)
+    : 0;
+
+  return { extraction, enrichment, email, youtubeEmail, total: extraction + enrichment + email + youtubeEmail };
 }

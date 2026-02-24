@@ -108,6 +108,71 @@ function timeAgo(dateStr: string | null): string {
   return new Date(dateStr).toLocaleDateString("ko-KR", { month: "short", day: "numeric" });
 }
 
+function getElapsedText(startedAt: string | null): string {
+  if (!startedAt) return "";
+  const elapsed = Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000);
+  if (elapsed < 5) return "";
+  if (elapsed < 60) return `${elapsed}초`;
+  const minutes = Math.floor(elapsed / 60);
+  const seconds = elapsed % 60;
+  if (minutes < 60) return `${minutes}분 ${seconds}초`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}시간 ${minutes % 60}분`;
+}
+
+/** YouTube email extraction button with stats */
+function YtEmailButton({ onJobStarted }: { onJobStarted: (jobId: string) => void }) {
+  const [loading, setLoading] = useState(false);
+  const [stats, setStats] = useState<{ without_email: number; estimated_cost: string } | null>(null);
+
+  useEffect(() => {
+    fetch("/api/extract/youtube-email")
+      .then((r) => r.json())
+      .then((d) => setStats({ without_email: d.without_email ?? 0, estimated_cost: d.estimated_cost ?? "0" }))
+      .catch(() => {});
+  }, []);
+
+  const handleClick = async () => {
+    if (loading) return;
+    setLoading(true);
+    try {
+      const res = await fetch("/api/extract/youtube-email", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error ?? "YouTube 이메일 추출 실패");
+        if (data.existing_job_id) onJobStarted(data.existing_job_id);
+        return;
+      }
+      toast.success(`YouTube 이메일 추출 시작: ${data.total_channels}채널`);
+      if (data.job_id) onJobStarted(data.job_id);
+    } catch {
+      toast.error("YouTube 이메일 추출 요청 실패");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-3">
+      {stats && stats.without_email > 0 && (
+        <span className="text-[11px] text-muted-foreground">
+          {stats.without_email}명 대기 · ~${stats.estimated_cost}
+        </span>
+      )}
+      <Button
+        size="sm"
+        variant="outline"
+        onClick={handleClick}
+        disabled={loading || (stats?.without_email === 0)}
+        className="h-8 gap-1.5 text-red-600 border-red-200 hover:bg-red-50 dark:text-red-400 dark:border-red-800 dark:hover:bg-red-950"
+      >
+        {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <PlayCircle className="w-3.5 h-3.5" />}
+        추출 시작
+      </Button>
+    </div>
+  );
+}
+
 export default function MasterExtractPage() {
   const supabase = createClient();
 
@@ -117,6 +182,15 @@ export default function MasterExtractPage() {
   const [loading, setLoading] = useState(true);
   const [extracting, setExtracting] = useState<string | null>(null);
   const [extractingAll, setExtractingAll] = useState<"keyword" | "tagged" | null>(null);
+
+  // Tick every second for elapsed time display on active jobs
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const hasActive = jobs.some((j) => j.status === "running" || j.status === "pending");
+    if (!hasActive) return;
+    const timer = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(timer);
+  }, [jobs]);
 
   // Global platform selection
   const [globalPlatforms, setGlobalPlatforms] = useState<string[]>(["instagram"]);
@@ -204,6 +278,8 @@ export default function MasterExtractPage() {
               toast.success(`이메일 추출 완료: ${result.total_extracted ?? 0}건`);
             } else if (currentJob?.type === "email_social") {
               toast.success(`소셜 이메일 추출 완료: ${result.new_extracted ?? 0}건 발견`);
+            } else if (currentJob?.type === "youtube_email") {
+              toast.success(`YouTube 이메일 추출 완료: ${result.total_extracted ?? 0}채널 (이메일 ${result.new_extracted ?? 0}건)`);
             } else {
               toast.success(`추출 완료: ${result.total_extracted ?? 0}건 (신규 ${result.new_extracted ?? 0}건)`);
               // If enrichment job was auto-triggered, start polling for it
@@ -215,6 +291,11 @@ export default function MasterExtractPage() {
               if (result.email_job_id) {
                 toast.info("이메일 추출이 자동 시작되었습니다 (바이오 링크 스크래핑)");
                 startPolling(result.email_job_id);
+              }
+              // If YouTube email extraction was auto-triggered, start polling
+              if (result.youtube_email_job_id) {
+                toast.info("YouTube 이메일 추출이 자동 시작되었습니다 (채널 이메일 수집)");
+                startPolling(result.youtube_email_job_id);
               }
             }
             // Handle auto-triggered email scrape from enrichment completion
@@ -388,6 +469,7 @@ export default function MasterExtractPage() {
     if (job.type === "enrich") return "프로필 보강";
     if (job.type === "email_scrape") return "이메일 추출";
     if (job.type === "email_social") return "소셜 이메일";
+    if (job.type === "youtube_email") return "YT 이메일";
     return job.type === "keyword" ? "키워드" : "태그";
   }
 
@@ -511,10 +593,11 @@ export default function MasterExtractPage() {
             const defaultLimit = 200;
             const pipeline = estimatePipelineCost(globalPlatforms, defaultLimit, sourceCount);
             const hasIG = globalPlatforms.includes("instagram");
+            const hasYT = globalPlatforms.includes("youtube");
             return (
               <div className="mt-3 bg-muted/40 rounded-lg px-3 py-2.5 space-y-2">
                 {/* Pipeline flow */}
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <div className="flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
                   <Sparkles className="w-3.5 h-3.5 text-primary flex-shrink-0" />
                   <span>파이프라인:</span>
                   <span className="font-medium text-foreground">추출</span>
@@ -526,6 +609,12 @@ export default function MasterExtractPage() {
                     </>
                   )}
                   <span className="text-purple-600 dark:text-purple-400 font-medium">[전체] 이메일 추출</span>
+                  {hasYT && (
+                    <>
+                      <ArrowRight className="w-3 h-3" />
+                      <span className="text-red-600 dark:text-red-400 font-medium">[YT] 채널 이메일</span>
+                    </>
+                  )}
                 </div>
                 {/* Cost breakdown */}
                 {sourceCount > 0 && (
@@ -536,6 +625,9 @@ export default function MasterExtractPage() {
                         <span className="block">├ IG 프로필 보강: <span className="text-amber-600 dark:text-amber-400 font-medium">~${pipeline.enrichment.toFixed(2)}</span></span>
                       )}
                       <span className="block">├ 이메일 추출 (~30%): <span className="text-amber-600 dark:text-amber-400 font-medium">~${pipeline.email.toFixed(2)}</span></span>
+                      {hasYT && (
+                        <span className="block">├ YT 채널 이메일: <span className="text-amber-600 dark:text-amber-400 font-medium">~${pipeline.youtubeEmail.toFixed(2)}</span></span>
+                      )}
                     </div>
                     <div className="ml-auto flex-shrink-0 text-right">
                       <span className="text-xs font-semibold text-amber-600 dark:text-amber-400">
@@ -788,9 +880,10 @@ export default function MasterExtractPage() {
                     if (taggedCostAccounts.length === 0) return null;
                     const pipeline = estimateTaggedPipelineCost(taggedCostAccounts);
                     const hasIG = taggedCostAccounts.some((a) => a.platform === "instagram");
+                    const hasYT = taggedCostAccounts.some((a) => a.platform === "youtube");
                     return (
                       <div className="px-3 py-2 bg-muted/40 space-y-1.5">
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
                           <Sparkles className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
                           <span>파이프라인:</span>
                           <span className="font-medium text-foreground">추출</span>
@@ -802,6 +895,12 @@ export default function MasterExtractPage() {
                             </>
                           )}
                           <span className="text-purple-600 dark:text-purple-400 font-medium">[전체] 이메일 추출</span>
+                          {hasYT && (
+                            <>
+                              <ArrowRight className="w-3 h-3" />
+                              <span className="text-red-600 dark:text-red-400 font-medium">[YT] 채널 이메일</span>
+                            </>
+                          )}
                         </div>
                         <div className="flex items-start gap-4 text-[10px] text-muted-foreground pl-5">
                           <div className="space-y-0.5">
@@ -815,6 +914,9 @@ export default function MasterExtractPage() {
                               <span className="block">├ IG 프로필 보강: <span className="text-amber-600 dark:text-amber-400 font-medium">~${pipeline.enrichment.toFixed(2)}</span></span>
                             )}
                             <span className="block">├ 이메일 추출 (~30%): <span className="text-amber-600 dark:text-amber-400 font-medium">~${pipeline.email.toFixed(2)}</span></span>
+                            {hasYT && (
+                              <span className="block">├ YT 채널 이메일: <span className="text-amber-600 dark:text-amber-400 font-medium">~${pipeline.youtubeEmail.toFixed(2)}</span></span>
+                            )}
                           </div>
                           <div className="ml-auto flex-shrink-0 text-right">
                             <span className="text-xs font-semibold text-amber-600 dark:text-amber-400">
@@ -884,6 +986,28 @@ export default function MasterExtractPage() {
       </div>
 
       {/* ================================================================
+       * YOUTUBE EMAIL - Manual extraction for existing YouTube influencers
+       * ================================================================ */}
+      <Card>
+        <CardContent className="p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-full bg-red-500/10 flex items-center justify-center flex-shrink-0">
+                <Zap className="w-4.5 h-4.5 text-red-500" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-sm">YouTube 채널 이메일 추출</h3>
+                <p className="text-[11px] text-muted-foreground">
+                  기존 YouTube 인플루언서의 CAPTCHA 보호 비즈니스 이메일 추출 (채널당 $0.005)
+                </p>
+              </div>
+            </div>
+            <YtEmailButton onJobStarted={(jobId) => startPolling(jobId)} />
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* ================================================================
        * ACTIVE JOBS - Running/Pending shown as prominent cards
        * ================================================================ */}
       {(() => {
@@ -902,8 +1026,8 @@ export default function MasterExtractPage() {
                 const cfg = job.input_config as Record<string, unknown> | null;
                 const limit = Number(cfg?.resultsLimit ?? cfg?.resultsPerPage ?? cfg?.maxResults ?? cfg?.maxItems ?? 0);
                 const progress = limit > 0 && extracted > 0 ? Math.min((extracted / limit) * 100, 100) : 0;
-                const typeLabels: Record<string, string> = { keyword: "키워드 추출", tagged: "태그 추출", enrich: "프로필 보강", email_scrape: "이메일 추출" };
-                const typeIcons: Record<string, typeof Zap> = { keyword: SearchIcon, tagged: AtSign, enrich: Sparkles, email_scrape: Zap };
+                const typeLabels: Record<string, string> = { keyword: "키워드 추출", tagged: "태그 추출", enrich: "프로필 보강", email_scrape: "이메일 추출", youtube_email: "YT 이메일" };
+                const typeIcons: Record<string, typeof Zap> = { keyword: SearchIcon, tagged: AtSign, enrich: Sparkles, email_scrape: Zap, youtube_email: Zap };
                 const TypeIcon = typeIcons[job.type] ?? Zap;
 
                 return (
@@ -940,21 +1064,37 @@ export default function MasterExtractPage() {
                             {extracted > 0 ? (
                               <span className="text-primary">{extracted.toLocaleString()}건</span>
                             ) : (
-                              <span className="text-muted-foreground">시작 중...</span>
+                              <span className="text-muted-foreground">
+                                {job.status === "running"
+                                  ? (() => {
+                                      const elapsed = getElapsedText(job.started_at);
+                                      return elapsed ? `Apify 추출 중... (${elapsed})` : "Apify 시작 중...";
+                                    })()
+                                  : "대기 중..."}
+                              </span>
                             )}
                             {limit > 0 && <span className="text-muted-foreground"> / {limit.toLocaleString()}</span>}
                           </span>
                         </div>
                         <div className="h-1.5 bg-muted rounded-full overflow-hidden">
-                          <div
-                            className="h-full bg-primary rounded-full transition-all duration-700 ease-out"
-                            style={{ width: `${progress > 0 ? Math.max(progress, 5) : 0}%` }}
-                          />
+                          {extracted > 0 ? (
+                            <div
+                              className="h-full bg-primary rounded-full transition-all duration-700 ease-out"
+                              style={{ width: `${progress > 0 ? Math.max(progress, 5) : 0}%` }}
+                            />
+                          ) : (
+                            <div
+                              className="h-full w-1/3 bg-primary/60 rounded-full animate-[indeterminate_1.5s_ease-in-out_infinite]"
+                            />
+                          )}
                         </div>
                       </div>
 
-                      <div className="text-[10px] text-muted-foreground">
-                        시작: {job.started_at ? new Date(job.started_at).toLocaleString("ko-KR") : "-"}
+                      <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                        <span>시작: {job.started_at ? new Date(job.started_at).toLocaleString("ko-KR") : "-"}</span>
+                        {job.started_at && (
+                          <span className="font-medium">{getElapsedText(job.started_at) || "방금 시작"}</span>
+                        )}
                       </div>
                     </CardContent>
                   </Card>
@@ -1066,6 +1206,7 @@ export default function MasterExtractPage() {
                           tagged: { label: "태그", color: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300" },
                           enrich: { label: "보강", color: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300" },
                           email_scrape: { label: "이메일", color: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300" },
+                          youtube_email: { label: "YT이메일", color: "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300" },
                         };
                         const typeInfo = typeLabels[job.type] ?? { label: job.type, color: "bg-muted text-muted-foreground" };
 
@@ -1124,7 +1265,7 @@ export default function MasterExtractPage() {
                               {(job.status === "running" || job.status === "pending") ? (
                                 <span className="flex items-center gap-1 text-xs text-primary font-medium min-w-[50px] justify-end">
                                   <Loader2 className="w-3 h-3 animate-spin" />
-                                  {extracted > 0 ? extracted.toLocaleString() : "-"}
+                                  {extracted > 0 ? extracted.toLocaleString() : (getElapsedText(job.started_at) || "시작")}
                                 </span>
                               ) : (
                                 <Tooltip>

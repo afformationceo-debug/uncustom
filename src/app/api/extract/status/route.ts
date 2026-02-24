@@ -44,6 +44,10 @@ export async function GET(request: Request) {
     }
 
     if (!job.apify_run_id) {
+      // youtube_email jobs track multiple runs in input_config (no single apify_run_id)
+      if (job.type === "youtube_email") {
+        return handleYoutubeEmailStatus(supabase, job, jobId);
+      }
       return NextResponse.json({ status: job.status, total_extracted: 0 });
     }
 
@@ -192,7 +196,15 @@ async function handleExtractionResults(
     } as unknown as Json;
 
     const externalUrl = (rawItems[0].externalUrl ?? rawItems[0].externalUrlShimmed ?? null) as string | null;
-    const bioLinks = extractLinksFromBio(transformed.bio, externalUrl);
+    // YouTube "bio" = video description (promotional links, NOT personal bio)
+    // Only extract bio links for platforms where bio is actually a personal profile
+    // YouTube: skip bio link extraction entirely (emails already extracted via regex from description)
+    let bioLinks: string[];
+    if (job.platform === "youtube") {
+      bioLinks = externalUrl ? [externalUrl] : [];
+    } else {
+      bioLinks = extractLinksFromBio(transformed.bio, externalUrl);
+    }
 
     // Upsert influencer
     const { data: existingInf } = await supabase
@@ -509,12 +521,20 @@ async function handleExtractionResults(
 
   // Auto-trigger email extraction ONLY for this extraction's influencers (scoped, not global)
   // For Instagram: enrichment adds external_url later, so email extraction triggers again after enrichment
+  // For YouTube: use endspec CAPTCHA-bypassing actor instead of web scraper
   let emailJobId: string | null = null;
+  let ytEmailJobId: string | null = null;
   if (processedInfluencerIds.length > 0) {
     try {
-      emailJobId = await autoTriggerBatchEmailExtraction(supabase, job.campaign_id, processedInfluencerIds);
+      if (job.platform === "youtube") {
+        // YouTube: use dedicated YouTube email actor (endspec) for CAPTCHA-protected business emails
+        ytEmailJobId = await autoTriggerYoutubeEmailExtraction(supabase, job.campaign_id, processedInfluencerIds);
+      } else {
+        // Other platforms: use web scraper for bio links
+        emailJobId = await autoTriggerBatchEmailExtraction(supabase, job.campaign_id, processedInfluencerIds);
+      }
     } catch (err) {
-      console.error("[extract/status] Auto batch email extraction error:", err);
+      console.error("[extract/status] Auto email extraction error:", err);
     }
   }
 
@@ -524,6 +544,7 @@ async function handleExtractionResults(
     new_extracted: newCount,
     enrich_job_id: enrichJobId,
     email_job_id: emailJobId,
+    youtube_email_job_id: ytEmailJobId,
   });
 }
 
@@ -1260,6 +1281,260 @@ async function handleEmailScrapeResults(
     total_extracted: totalProcessed,
     new_extracted: emailsFound,
     type: "email_scrape",
+  });
+}
+
+/**
+ * Auto-trigger YouTube email extraction using endspec CAPTCHA-bypassing actor.
+ * Starts one Apify run per YouTube channel (the actor processes one channel at a time).
+ * All run IDs are stored in input_config.runs for batch status tracking.
+ */
+async function autoTriggerYoutubeEmailExtraction(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  campaignId: string | null,
+  influencerIds: string[],
+): Promise<string | null> {
+  try {
+    if (influencerIds.length === 0) return null;
+
+    // Check for existing running youtube_email job
+    const { data: existingJob } = await supabase
+      .from("extraction_jobs")
+      .select("id")
+      .eq("type", "youtube_email")
+      .in("status", ["running", "pending"])
+      .limit(1);
+
+    if (existingJob && existingJob.length > 0) {
+      console.log("[extract/status] YouTube email extraction already running");
+      return null;
+    }
+
+    // Get YouTube influencers without email from the processed batch
+    const allInfluencers: Array<{ id: string; username: string | null; platform_id: string | null }>[] = [];
+    for (let i = 0; i < influencerIds.length; i += 100) {
+      const chunk = influencerIds.slice(i, i + 100);
+      const { data } = await supabase
+        .from("influencers")
+        .select("id, username, platform_id")
+        .eq("platform", "youtube")
+        .is("email", null)
+        .in("id", chunk);
+      if (data) allInfluencers.push(data as Array<{ id: string; username: string | null; platform_id: string | null }>);
+    }
+
+    const flatInfluencers = allInfluencers.flat();
+    if (flatInfluencers.length === 0) {
+      console.log("[extract/status] No YouTube influencers need email extraction");
+      return null;
+    }
+
+    // Cap at 50 channels per batch
+    const batch = flatInfluencers.slice(0, 50);
+
+    // Start Apify runs for each channel (endspec actor accepts one channel per run)
+    type YtEmailRun = { run_id: string; dataset_id: string; channel_handle: string; influencer_id: string };
+    const runs: YtEmailRun[] = [];
+
+    for (const inf of batch) {
+      // Prefer @handle format, fall back to channel ID
+      const handle = inf.username ? `@${inf.username}` : null;
+      const channelId = inf.platform_id || null;
+      if (!handle && !channelId) continue;
+
+      try {
+        const input = handle
+          ? { channelHandle: handle }
+          : { id: channelId };
+
+        const run = await startActor(APIFY_ACTORS.YOUTUBE_EMAIL, input);
+        runs.push({
+          run_id: run.id,
+          dataset_id: run.defaultDatasetId,
+          channel_handle: handle || channelId!,
+          influencer_id: inf.id,
+        });
+      } catch (err) {
+        console.error(`[extract/status] Failed to start YouTube email run for ${handle || channelId}:`, err);
+      }
+    }
+
+    if (runs.length === 0) {
+      console.log("[extract/status] No YouTube email runs started");
+      return null;
+    }
+
+    // Create tracking job (apify_run_id=null, all runs in input_config)
+    const { data: jobData, error: jobError } = await supabase
+      .from("extraction_jobs")
+      .insert({
+        campaign_id: campaignId,
+        type: "youtube_email",
+        platform: "youtube",
+        status: "running",
+        apify_run_id: null,
+        input_config: {
+          runs,
+          total_channels: runs.length,
+          auto_triggered: true,
+        } as unknown as Json,
+        started_at: new Date().toISOString(),
+      })
+      .select("id")
+      .single();
+
+    if (jobError || !jobData) {
+      console.error("[extract/status] Failed to create YouTube email job:", jobError?.message);
+      return null;
+    }
+
+    console.log(`[extract/status] YouTube email job started: ${jobData.id} (${runs.length} channels)`);
+    return jobData.id;
+  } catch (err) {
+    console.error("[extract/status] Auto YouTube email extraction error:", err);
+    return null;
+  }
+}
+
+/**
+ * Handle youtube_email job status: check all runs, process completed results.
+ * Each run returns: { status, id, channelHandle, emails[], socials[], urls[] }
+ */
+async function handleYoutubeEmailStatus(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  job: ExtractionJob,
+  jobId: string,
+) {
+  const inputConfig = job.input_config as Record<string, unknown> | null;
+  const runs = (inputConfig?.runs ?? []) as Array<{
+    run_id: string;
+    dataset_id: string;
+    channel_handle: string;
+    influencer_id: string;
+  }>;
+
+  if (runs.length === 0) {
+    await supabase
+      .from("extraction_jobs")
+      .update({ status: "completed", completed_at: new Date().toISOString() })
+      .eq("id", jobId);
+    return NextResponse.json({ status: "completed", total_extracted: 0, new_extracted: 0, type: "youtube_email" });
+  }
+
+  // Check status of ALL runs
+  let completedCount = 0;
+  let failedCount = 0;
+  const completedRuns: Array<{ run: typeof runs[0]; datasetId: string }> = [];
+
+  for (const run of runs) {
+    try {
+      const runStatus = await getRunStatus(run.run_id);
+      if (!runStatus) {
+        failedCount++;
+        continue;
+      }
+      if (runStatus.status === "SUCCEEDED") {
+        completedCount++;
+        completedRuns.push({ run, datasetId: runStatus.defaultDatasetId });
+      } else if (runStatus.status === "FAILED" || runStatus.status === "ABORTED") {
+        failedCount++;
+      }
+      // else: still running
+    } catch {
+      failedCount++;
+    }
+  }
+
+  const stillRunning = runs.length - completedCount - failedCount;
+  if (stillRunning > 0) {
+    return NextResponse.json({
+      status: "running",
+      total_extracted: completedCount,
+      type: "youtube_email",
+    });
+  }
+
+  // All runs finished (completed or failed) — process results
+  let emailsFound = 0;
+  let totalProcessed = 0;
+
+  for (const { run, datasetId } of completedRuns) {
+    try {
+      const items = await getDatasetItems(datasetId);
+      totalProcessed++;
+
+      for (const item of items) {
+        const result = item as Record<string, unknown>;
+        const emails = (result.emails ?? []) as string[];
+        // Filter out generic/privacy emails
+        const validEmails = emails.filter(
+          (e) => typeof e === "string" && e.includes("@") &&
+            !e.includes("gdprlocal.com") && !e.includes("privacy@") &&
+            !e.includes("dpo.support@") && !e.includes("noreply@")
+        );
+
+        if (validEmails.length > 0) {
+          // Check if influencer still doesn't have an email
+          const { data: inf } = await supabase
+            .from("influencers")
+            .select("email")
+            .eq("id", run.influencer_id)
+            .single();
+
+          if (inf && !inf.email) {
+            await supabase
+              .from("influencers")
+              .update({
+                email: validEmails[0],
+                email_source: "youtube_about",
+              })
+              .eq("id", run.influencer_id);
+            emailsFound++;
+            console.log(`[extract/status] YouTube email found for ${run.channel_handle}: ${validEmails[0]}`);
+          }
+        }
+
+        // Also store social links if available
+        const socials = (result.socials ?? []) as string[];
+        if (socials.length > 0) {
+          // Store first social link as external_url if influencer doesn't have one
+          const { data: infExt } = await supabase
+            .from("influencers")
+            .select("external_url")
+            .eq("id", run.influencer_id)
+            .single();
+
+          if (infExt && !infExt.external_url && socials[0]) {
+            await supabase
+              .from("influencers")
+              .update({ external_url: socials[0] })
+              .eq("id", run.influencer_id);
+          }
+        }
+      }
+    } catch (err) {
+      console.error(`[extract/status] Failed to process YouTube email results for ${run.channel_handle}:`, err);
+    }
+  }
+
+  // Update job status
+  await supabase
+    .from("extraction_jobs")
+    .update({
+      status: "completed",
+      total_extracted: totalProcessed,
+      new_extracted: emailsFound,
+      completed_at: new Date().toISOString(),
+    })
+    .eq("id", jobId);
+
+  console.log(`[extract/status] YouTube email completed: ${totalProcessed}/${runs.length} channels processed, ${emailsFound} emails found`);
+
+  return NextResponse.json({
+    status: "completed",
+    total_extracted: totalProcessed,
+    new_extracted: emailsFound,
+    type: "youtube_email",
   });
 }
 
