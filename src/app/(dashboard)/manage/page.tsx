@@ -1,36 +1,33 @@
 "use client";
 
-import { useEffect, useState, Suspense } from "react";
+import { useEffect, useState, useCallback, useRef, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { CampaignSelector } from "@/components/campaign-selector";
-import { Card, CardContent } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
+  Dialog, DialogContent, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { useRealtime } from "@/hooks/use-realtime";
-import {
-  Users,
-  Mail,
-  Search,
-  StickyNote,
-  ExternalLink,
-  ClipboardList,
-} from "lucide-react";
+import { LayoutGrid } from "lucide-react";
 import type { Tables } from "@/types/database";
-import { CAMPAIGN_INFLUENCER_STATUSES, PLATFORMS } from "@/types/platform";
+import type { ColumnGroup } from "@/components/manage/funnel-columns";
+import type { ManageFilters } from "@/components/manage/funnel-filters";
+
+import { FunnelSummary } from "@/components/manage/funnel-summary";
+import { FunnelTable } from "@/components/manage/funnel-table";
+import { FunnelFilters, DEFAULT_FILTERS } from "@/components/manage/funnel-filters";
+import { FunnelAdvancedFilters } from "@/components/manage/funnel-advanced-filters";
+import { FunnelPagination } from "@/components/manage/funnel-pagination";
+import { FunnelDetailPanel } from "@/components/manage/funnel-detail-panel";
+import { FunnelBulkActions } from "@/components/manage/funnel-bulk-actions";
+import { FunnelExportButton } from "@/components/manage/funnel-export-button";
 
 type CampaignInfluencer = Tables<"campaign_influencers"> & {
   influencer?: Tables<"influencers">;
+  campaign?: { id: string; name: string };
 };
 
 export default function ManagePage() {
@@ -41,382 +38,327 @@ export default function ManagePage() {
   );
 }
 
+// Load column groups from localStorage — default to ALL groups
+function loadColumnGroups(): ColumnGroup[] {
+  if (typeof window === "undefined") return ["outreach", "confirm", "execution", "content", "settlement"];
+  try {
+    const saved = localStorage.getItem("manage_column_groups");
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch { /* ignore */ }
+  return ["outreach", "confirm", "execution", "content", "settlement"];
+}
+
 function ManagePageContent() {
-  const [campaignId, setCampaignId] = useState<string | null>(null);
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const supabase = createClient();
 
+  // Campaign — null means "전체 캠페인"
+  const [campaignId, setCampaignId] = useState<string | null>(null);
+  const [initialized, setInitialized] = useState(false);
+
+  // Data
   const [items, setItems] = useState<CampaignInfluencer[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [searchQuery, setSearchQuery] = useState("");
-  const [editingNote, setEditingNote] = useState<CampaignInfluencer | null>(null);
-  const [noteText, setNoteText] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [total, setTotal] = useState(0);
+  const [statusCounts, setStatusCounts] = useState<Record<string, number>>({});
+
+  // Pagination
+  const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(50);
+  const [totalPages, setTotalPages] = useState(1);
+
+  // Filters
+  const [filters, setFilters] = useState<ManageFilters>(DEFAULT_FILTERS);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+
+  // Column groups
+  const [activeGroups, setActiveGroups] = useState<ColumnGroup[]>(loadColumnGroups);
+
+  // Selection
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+
+  // Detail panel
+  const [detailItem, setDetailItem] = useState<CampaignInfluencer | null>(null);
+
+  // Note editor
+  const [editingNote, setEditingNote] = useState<{ id: string; field: string; value: string } | null>(null);
+
+  // Summary refresh key
+  const [summaryKey, setSummaryKey] = useState(0);
+
+  // Mark as initialized after first render (to trigger initial fetch)
+  useEffect(() => {
+    setInitialized(true);
+  }, []);
+
+  // Fetch data — works with or without campaignId
+  const fetchData = useCallback(async () => {
+    if (!initialized) return;
+    setLoading(true);
+
+    const params = new URLSearchParams();
+    if (campaignId) params.set("campaign_id", campaignId);
+    params.set("page", String(page));
+    params.set("limit", String(limit));
+
+    if (filters.funnel_status.length > 0) params.set("funnel_status", filters.funnel_status.join(","));
+    if (filters.platform.length > 0) params.set("platform", filters.platform.join(","));
+    if (filters.interest_confirmed !== undefined) params.set("interest_confirmed", String(filters.interest_confirmed));
+    if (filters.client_approved !== undefined) params.set("client_approved", String(filters.client_approved));
+    if (filters.final_confirmed !== undefined) params.set("final_confirmed", String(filters.final_confirmed));
+    if (filters.visit_completed !== undefined) params.set("visit_completed", String(filters.visit_completed));
+    if (filters.guideline_sent !== undefined) params.set("guideline_sent", String(filters.guideline_sent));
+    if (filters.crm_registered !== undefined) params.set("crm_registered", String(filters.crm_registered));
+    if (filters.influencer_payment_status.length > 0) params.set("influencer_payment_status", filters.influencer_payment_status.join(","));
+    if (filters.client_payment_status.length > 0) params.set("client_payment_status", filters.client_payment_status.join(","));
+    if (filters.has_email !== undefined) params.set("has_email", String(filters.has_email));
+    if (filters.has_upload_url !== undefined) params.set("has_upload_url", String(filters.has_upload_url));
+    if (filters.search) params.set("search", filters.search);
+    if (filters.visit_date_from) params.set("visit_date_from", filters.visit_date_from);
+    if (filters.visit_date_to) params.set("visit_date_to", filters.visit_date_to);
+    if (filters.upload_deadline_from) params.set("upload_deadline_from", filters.upload_deadline_from);
+    if (filters.upload_deadline_to) params.set("upload_deadline_to", filters.upload_deadline_to);
+
+    try {
+      const res = await fetch(`/api/manage?${params.toString()}`);
+      if (res.ok) {
+        const json = await res.json();
+        setItems(json.data ?? []);
+        setTotal(json.total ?? 0);
+        setTotalPages(json.totalPages ?? 1);
+      }
+    } catch {
+      toast.error("데이터 조회 실패");
+    }
+    setLoading(false);
+  }, [initialized, campaignId, page, limit, filters]);
+
+  // Fetch summary
+  const fetchSummary = useCallback(async () => {
+    if (!initialized) return;
+    try {
+      const url = campaignId
+        ? `/api/manage/summary?campaign_id=${campaignId}`
+        : `/api/manage/summary`;
+      const res = await fetch(url);
+      if (res.ok) {
+        const json = await res.json();
+        setStatusCounts(json.statusCounts ?? {});
+      }
+    } catch { /* ignore */ }
+  }, [initialized, campaignId]);
 
   useEffect(() => {
-    if (campaignId) {
-      fetchItems();
-    } else {
-      setItems([]);
-      setLoading(false);
-    }
-  }, [campaignId]);
+    fetchData();
+    fetchSummary();
+  }, [fetchData, fetchSummary]);
 
+  // Reset page when filters change
+  useEffect(() => {
+    setPage(1);
+    setSelectedIds([]);
+  }, [filters]);
+
+  // Save column groups to localStorage
+  useEffect(() => {
+    localStorage.setItem("manage_column_groups", JSON.stringify(activeGroups));
+  }, [activeGroups]);
+
+  // Realtime: row-level merge instead of full refetch
   useRealtime(
     "campaign_influencers",
     campaignId ? `campaign_id=eq.${campaignId}` : undefined,
-    () => { if (campaignId) fetchItems(); }
+    (payload: unknown) => {
+      const p = payload as { eventType?: string; new?: CampaignInfluencer; old?: { id: string } };
+      if (p.eventType === "UPDATE" && p.new) {
+        setItems((prev) => {
+          const idx = prev.findIndex((i) => i.id === p.new!.id);
+          if (idx >= 0) {
+            const updated = [...prev];
+            updated[idx] = { ...updated[idx], ...p.new! };
+            return updated;
+          }
+          return prev;
+        });
+        setSummaryKey((k) => k + 1);
+      } else if (p.eventType === "INSERT" || p.eventType === "DELETE") {
+        fetchData();
+        setSummaryKey((k) => k + 1);
+      }
+    }
   );
 
-  async function fetchItems() {
-    if (!campaignId) return;
-    setLoading(true);
-    const { data, error } = await supabase
-      .from("campaign_influencers")
-      .select(`
-        *,
-        influencer:influencers(username, display_name, email, platform, follower_count, profile_image_url, profile_url)
-      `)
-      .eq("campaign_id", campaignId)
-      .order("created_at", { ascending: false });
+  // Inline update handler
+  const debounceTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
-    if (!error) {
-      setItems((data as unknown as CampaignInfluencer[]) ?? []);
-    }
-    setLoading(false);
+  function handleUpdate(id: string, field: string, value: unknown) {
+    setItems((prev) =>
+      prev.map((item) =>
+        item.id === id ? { ...item, [field]: value } : item
+      )
+    );
+
+    const key = `${id}_${field}`;
+    if (debounceTimers.current[key]) clearTimeout(debounceTimers.current[key]);
+
+    debounceTimers.current[key] = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/manage/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ [field]: value }),
+        });
+        if (!res.ok) {
+          toast.error("저장 실패");
+          fetchData();
+        } else {
+          setSummaryKey((k) => k + 1);
+        }
+      } catch {
+        toast.error("저장 실패");
+        fetchData();
+      }
+    }, 300);
   }
 
-  async function updateStatus(id: string, status: string) {
-    const { error } = await supabase
-      .from("campaign_influencers")
-      .update({ status })
-      .eq("id", id);
-
-    if (error) {
-      toast.error("상태 변경 실패");
-    } else {
-      setItems((prev) =>
-        prev.map((i) => (i.id === id ? { ...i, status } : i))
-      );
-      toast.success("상태가 변경되었습니다.");
-    }
-  }
-
-  async function updateDate(id: string, field: string, value: string) {
-    const { error } = await supabase
-      .from("campaign_influencers")
-      .update({ [field]: value || null })
-      .eq("id", id);
-
-    if (error) {
-      toast.error("날짜 변경 실패");
-    } else {
-      setItems((prev) =>
-        prev.map((i) => (i.id === id ? { ...i, [field]: value || null } : i))
-      );
-    }
+  // Note editor
+  function handleNoteEdit(item: CampaignInfluencer) {
+    setEditingNote({ id: item.id, field: "notes", value: item.notes ?? "" });
   }
 
   async function saveNote() {
     if (!editingNote) return;
-    const { error } = await supabase
-      .from("campaign_influencers")
-      .update({ notes: noteText || null })
-      .eq("id", editingNote.id);
-
-    if (error) {
-      toast.error("메모 저장 실패");
-    } else {
-      setItems((prev) =>
-        prev.map((i) => (i.id === editingNote.id ? { ...i, notes: noteText || null } : i))
-      );
-      setEditingNote(null);
-      toast.success("메모가 저장되었습니다.");
-    }
+    handleUpdate(editingNote.id, editingNote.field, editingNote.value || null);
+    setEditingNote(null);
+    toast.success("메모가 저장되었습니다.");
   }
 
-  function formatCount(n: number | null) {
-    if (n === null) return "-";
-    if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
-    if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
-    return n.toString();
+  // Pagination handlers
+  function handlePageChange(newPage: number) {
+    setPage(newPage);
+    setSelectedIds([]);
   }
 
-  const filtered = items.filter((item) => {
-    const inf = item.influencer as unknown as Tables<"influencers">;
-    const matchesStatus = statusFilter === "all" || item.status === statusFilter;
-    const matchesSearch = !searchQuery ||
-      (inf?.display_name?.toLowerCase().includes(searchQuery.toLowerCase()) ?? false) ||
-      (inf?.username?.toLowerCase().includes(searchQuery.toLowerCase()) ?? false) ||
-      (inf?.email?.toLowerCase().includes(searchQuery.toLowerCase()) ?? false);
-    return matchesStatus && matchesSearch;
-  });
+  function handleLimitChange(newLimit: number) {
+    setLimit(newLimit);
+    setPage(1);
+    setSelectedIds([]);
+  }
 
-  const statusCounts: Record<string, number> = {};
-  items.forEach((item) => {
-    statusCounts[item.status] = (statusCounts[item.status] ?? 0) + 1;
-  });
+  // Filter change
+  function handleFiltersChange(newFilters: ManageFilters) {
+    setFilters(newFilters);
+  }
+
+  // Bulk action done
+  function handleBulkDone() {
+    setSelectedIds([]);
+    fetchData();
+    setSummaryKey((k) => k + 1);
+  }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-3">
+      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-xl font-bold">인플루언서 관리</h2>
-          <p className="text-sm text-muted-foreground mt-1">
-            캠페인 협업 인플루언서 상세 관리
+          <h2 className="text-lg font-bold flex items-center gap-2">
+            <LayoutGrid className="w-4 h-4" />
+            인플루언서 관리
+          </h2>
+          <p className="text-xs text-muted-foreground">
+            {campaignId ? "캠페인별 퍼널 관리" : "전체 캠페인 통합 관리"}
+            {total > 0 && ` — ${total.toLocaleString()}명`}
           </p>
         </div>
-        <CampaignSelector mode="required" value={campaignId} onChange={setCampaignId} />
+        <div className="flex items-center gap-2">
+          <FunnelExportButton campaignId={campaignId} />
+          <CampaignSelector mode="filter" value={campaignId} onChange={setCampaignId} />
+        </div>
       </div>
 
-      {!campaignId ? (
-        <div className="text-center py-16 text-muted-foreground">
-          <ClipboardList className="w-12 h-12 mx-auto mb-3 opacity-50" />
-          <p className="text-lg font-medium">캠페인을 선택하세요</p>
-          <p className="text-sm mt-1">인플루언서를 관리할 캠페인을 먼저 선택해주세요.</p>
-        </div>
-      ) : (
-        <>
-          <div className="flex items-center justify-between">
-            <Badge variant="secondary">{items.length}명</Badge>
-          </div>
+      {/* Summary bar */}
+      <FunnelSummary campaignId={campaignId} refreshKey={summaryKey} />
 
-          {/* Status Pipeline */}
-          <div className="flex gap-2 flex-wrap">
-            <button
-              onClick={() => setStatusFilter("all")}
-              className={`px-3 py-1.5 rounded-lg text-xs transition-colors ${
-                statusFilter === "all" ? "bg-primary text-primary-foreground" : "bg-muted hover:bg-accent"
-              }`}
-            >
-              전체 ({items.length})
-            </button>
-            {CAMPAIGN_INFLUENCER_STATUSES.map((s) => {
-              const count = statusCounts[s.value] ?? 0;
-              return (
-                <button
-                  key={s.value}
-                  onClick={() => setStatusFilter(s.value)}
-                  className={`px-3 py-1.5 rounded-lg text-xs transition-colors flex items-center gap-1.5 ${
-                    statusFilter === s.value
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-muted hover:bg-accent"
-                  }`}
-                >
-                  <div
-                    className="w-2 h-2 rounded-full"
-                    style={{ backgroundColor: s.color }}
-                  />
-                  {s.label} ({count})
-                </button>
-              );
-            })}
-          </div>
+      {/* Filters */}
+      <FunnelFilters
+        filters={filters}
+        statusCounts={statusCounts}
+        total={total}
+        onFiltersChange={handleFiltersChange}
+        onAdvancedOpen={() => setAdvancedOpen(true)}
+      />
 
-          {/* Search */}
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <Input
-              placeholder="이름, 유저네임, 이메일 검색..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-10"
+      {/* Advanced filters sheet */}
+      <FunnelAdvancedFilters
+        open={advancedOpen}
+        onOpenChange={setAdvancedOpen}
+        filters={filters}
+        onFiltersChange={handleFiltersChange}
+      />
+
+      {/* Table */}
+      <FunnelTable
+        items={items}
+        loading={loading}
+        selectedIds={selectedIds}
+        onSelectionChange={setSelectedIds}
+        activeGroups={activeGroups}
+        onGroupsChange={setActiveGroups}
+        onUpdate={handleUpdate}
+        onNoteEdit={handleNoteEdit}
+        onRowClick={setDetailItem}
+      />
+
+      {/* Pagination */}
+      <FunnelPagination
+        page={page}
+        totalPages={totalPages}
+        total={total}
+        limit={limit}
+        onPageChange={handlePageChange}
+        onLimitChange={handleLimitChange}
+      />
+
+      {/* Detail panel */}
+      <FunnelDetailPanel
+        item={detailItem}
+        open={!!detailItem}
+        onOpenChange={(open) => { if (!open) setDetailItem(null); }}
+      />
+
+      {/* Bulk actions */}
+      <FunnelBulkActions
+        selectedIds={selectedIds}
+        campaignId={campaignId}
+        onClear={() => setSelectedIds([])}
+        onDone={handleBulkDone}
+      />
+
+      {/* Note editor dialog */}
+      <Dialog open={!!editingNote} onOpenChange={() => setEditingNote(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>메모 편집</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <Textarea
+              value={editingNote?.value ?? ""}
+              onChange={(e) => setEditingNote(editingNote ? { ...editingNote, value: e.target.value } : null)}
+              placeholder="메모를 입력하세요..."
+              rows={5}
             />
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setEditingNote(null)}>취소</Button>
+              <Button onClick={saveNote}>저장</Button>
+            </div>
           </div>
-
-          <Card>
-            <CardContent className="p-0 overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="sticky left-0 bg-card z-10">인플루언서</TableHead>
-                    <TableHead>플랫폼</TableHead>
-                    <TableHead>팔로워</TableHead>
-                    <TableHead>상태</TableHead>
-                    <TableHead>협업일</TableHead>
-                    <TableHead>방문일</TableHead>
-                    <TableHead>업로드 마감</TableHead>
-                    <TableHead>실제 업로드</TableHead>
-                    <TableHead>메모</TableHead>
-                    <TableHead className="w-12" />
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {loading ? (
-                    <TableRow>
-                      <TableCell colSpan={10} className="text-center py-8 text-muted-foreground">
-                        로딩 중...
-                      </TableCell>
-                    </TableRow>
-                  ) : filtered.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={10} className="text-center py-8 text-muted-foreground">
-                        관리할 인플루언서가 없습니다.
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    filtered.map((item) => {
-                      const inf = item.influencer as unknown as Tables<"influencers">;
-                      return (
-                        <TableRow key={item.id}>
-                          <TableCell className="sticky left-0 bg-card z-10">
-                            <div className="flex items-center gap-2">
-                              {inf?.profile_image_url ? (
-                                <img
-                                  src={inf.profile_image_url}
-                                  alt=""
-                                  className="w-8 h-8 rounded-full object-cover shrink-0"
-                                />
-                              ) : (
-                                <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center shrink-0">
-                                  <Users className="w-4 h-4 text-muted-foreground" />
-                                </div>
-                              )}
-                              <div>
-                                <div className="font-medium text-sm">
-                                  {inf?.display_name ?? inf?.username ?? "-"}
-                                </div>
-                                {inf?.email && (
-                                  <div className="text-xs text-muted-foreground flex items-center gap-1">
-                                    <Mail className="w-3 h-3" />
-                                    {inf.email}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant="secondary" className="text-xs">
-                              {PLATFORMS.find((p) => p.value === inf?.platform)?.label ?? inf?.platform}
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="text-sm">
-                            {formatCount(inf?.follower_count ?? null)}
-                          </TableCell>
-                          <TableCell>
-                            <Select
-                              value={item.status}
-                              onValueChange={(v) => updateStatus(item.id, v)}
-                            >
-                              <SelectTrigger className="w-28 h-7 text-xs">
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {CAMPAIGN_INFLUENCER_STATUSES.map((s) => (
-                                  <SelectItem key={s.value} value={s.value}>
-                                    <div className="flex items-center gap-1.5">
-                                      <div
-                                        className="w-2 h-2 rounded-full"
-                                        style={{ backgroundColor: s.color }}
-                                      />
-                                      {s.label}
-                                    </div>
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          </TableCell>
-                          <TableCell>
-                            <Input
-                              type="date"
-                              value={item.agreed_date ?? ""}
-                              onChange={(e) => updateDate(item.id, "agreed_date", e.target.value)}
-                              className="w-36 h-7 text-xs"
-                            />
-                          </TableCell>
-                          <TableCell>
-                            <Input
-                              type="date"
-                              value={item.visit_date ?? ""}
-                              onChange={(e) => updateDate(item.id, "visit_date", e.target.value)}
-                              className="w-36 h-7 text-xs"
-                            />
-                          </TableCell>
-                          <TableCell>
-                            <Input
-                              type="date"
-                              value={item.upload_deadline ?? ""}
-                              onChange={(e) => updateDate(item.id, "upload_deadline", e.target.value)}
-                              className="w-36 h-7 text-xs"
-                            />
-                          </TableCell>
-                          <TableCell>
-                            <Input
-                              type="date"
-                              value={item.actual_upload_date ?? ""}
-                              onChange={(e) => updateDate(item.id, "actual_upload_date", e.target.value)}
-                              className="w-36 h-7 text-xs"
-                            />
-                          </TableCell>
-                          <TableCell>
-                            {item.notes ? (
-                              <button
-                                onClick={() => {
-                                  setEditingNote(item);
-                                  setNoteText(item.notes ?? "");
-                                }}
-                                className="text-xs text-muted-foreground truncate max-w-24 block hover:text-primary"
-                                title={item.notes}
-                              >
-                                {item.notes.slice(0, 20)}...
-                              </button>
-                            ) : (
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-6 w-6 p-0"
-                                onClick={() => {
-                                  setEditingNote(item);
-                                  setNoteText("");
-                                }}
-                              >
-                                <StickyNote className="w-3.5 h-3.5 text-muted-foreground" />
-                              </Button>
-                            )}
-                          </TableCell>
-                          <TableCell>
-                            {inf?.profile_url && (
-                              <a href={inf.profile_url} target="_blank" rel="noopener noreferrer">
-                                <ExternalLink className="w-4 h-4 text-muted-foreground hover:text-foreground" />
-                              </a>
-                            )}
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })
-                  )}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
-
-          {/* Note Editor Dialog */}
-          <Dialog open={!!editingNote} onOpenChange={() => setEditingNote(null)}>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>메모 편집</DialogTitle>
-              </DialogHeader>
-              <div className="space-y-4">
-                {editingNote && (
-                  <div className="text-sm text-muted-foreground">
-                    {(editingNote.influencer as unknown as Tables<"influencers">)?.display_name ??
-                      (editingNote.influencer as unknown as Tables<"influencers">)?.username ?? "인플루언서"}
-                  </div>
-                )}
-                <Textarea
-                  value={noteText}
-                  onChange={(e) => setNoteText(e.target.value)}
-                  placeholder="메모를 입력하세요..."
-                  rows={5}
-                />
-                <div className="flex justify-end gap-2">
-                  <Button variant="outline" onClick={() => setEditingNote(null)}>취소</Button>
-                  <Button onClick={saveNote}>저장</Button>
-                </div>
-              </div>
-            </DialogContent>
-          </Dialog>
-        </>
-      )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

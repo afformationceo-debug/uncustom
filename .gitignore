@@ -49,6 +49,9 @@ next-env.d.ts
 # CSV data files
 *.csv
 
+# Apify bulk export
+apify-ig-hashtag-all.json
+
 # playwright
 .playwright-mcp/
 
