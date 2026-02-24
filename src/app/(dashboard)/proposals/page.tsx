@@ -844,6 +844,82 @@ function ProposalsPage() {
           </div>
         </div>
 
+        {/* ===== PUBLISHED LINKS OVERVIEW ===== */}
+        {(() => {
+          const publishedLinks = enrichedProposals.filter((p) => p.status === "published");
+          if (publishedLinks.length === 0) return null;
+          return (
+            <Card className="border-border/50 bg-gradient-to-r from-green-500/5 via-background to-green-500/3">
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                    <div className="w-6 h-6 rounded-full bg-green-500/10 flex items-center justify-center">
+                      <LinkIcon className="w-3.5 h-3.5 text-green-600" />
+                    </div>
+                    공개 링크 관리
+                    <Badge variant="secondary" className="text-[10px] bg-green-500/10 text-green-600">
+                      {publishedLinks.length}개 활성
+                    </Badge>
+                  </CardTitle>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs text-muted-foreground"
+                    onClick={() => {
+                      const urls = publishedLinks.map((p) => `${window.location.origin}/proposals/p/${p.slug}`).join("\n");
+                      navigator.clipboard.writeText(urls);
+                      toast.success("모든 공개 링크가 복사되었습니다.");
+                    }}
+                  >
+                    <Copy className="w-3 h-3 mr-1" />
+                    전체 복사
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent className="pt-0">
+                <div className="space-y-2">
+                  {publishedLinks.map((p) => {
+                    const publicUrl = `${typeof window !== "undefined" ? window.location.origin : ""}/proposals/p/${p.slug}`;
+                    return (
+                      <div key={p.id} className="flex items-center gap-3 px-3 py-2 rounded-lg bg-background/80 border border-border/30 hover:border-green-500/30 transition-colors group/link">
+                        <div className="flex items-center gap-2 min-w-0 flex-1">
+                          <Globe className="w-3.5 h-3.5 text-green-500 flex-shrink-0" />
+                          <span className="text-xs font-medium text-foreground truncate">{p.title}</span>
+                          <Badge variant="outline" className="text-[9px] flex-shrink-0">{p.campaign_name}</Badge>
+                        </div>
+                        <code className="text-[10px] text-muted-foreground truncate max-w-[300px] hidden sm:block font-mono">
+                          /proposals/p/{p.slug}
+                        </code>
+                        <div className="flex items-center gap-1 flex-shrink-0">
+                          <span className="text-[10px] text-muted-foreground mr-1">
+                            {p.response_count ?? 0}건
+                          </span>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6 text-muted-foreground hover:text-green-600"
+                            onClick={() => {
+                              navigator.clipboard.writeText(publicUrl);
+                              toast.success("링크가 복사되었습니다.");
+                            }}
+                          >
+                            <Copy className="w-3 h-3" />
+                          </Button>
+                          <a href={`/proposals/p/${p.slug}`} target="_blank" rel="noopener noreferrer">
+                            <Button variant="ghost" size="icon" className="h-6 w-6 text-muted-foreground hover:text-green-600">
+                              <ExternalLink className="w-3 h-3" />
+                            </Button>
+                          </a>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })()}
+
         {/* ===== PROPOSAL CARDS GRID ===== */}
         {loading ? (
           <div className="flex items-center justify-center py-20">
@@ -1336,197 +1412,193 @@ function ProposalsPage() {
             <div className="h-4" />
           </div>
 
-          {/* CENTER: Preview */}
+          {/* CENTER: Preview — matches public page layout */}
           <div className="max-h-[calc(100vh-240px)] overflow-y-auto">
-            <Card className="border-border/50 sticky top-0">
-              <CardHeader className="pb-3 border-b border-border/50">
-                <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                  <Eye className="w-4 h-4 text-muted-foreground" />
-                  미리보기
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="p-0">
-                <div className="bg-background rounded-b-lg overflow-hidden">
-                  {/* Preview: Hero */}
-                  {form.hero_image_url && (
-                    <div className="w-full aspect-[16/9] bg-muted relative overflow-hidden">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={form.hero_image_url}
-                        alt="Hero"
-                        className="w-full h-full object-cover"
-                        onError={(e) => {
-                          (e.target as HTMLImageElement).style.display = "none";
-                        }}
-                      />
-                    </div>
-                  )}
+            <div className="space-y-3">
+              {/* Preview header bar */}
+              <div className="flex items-center justify-between px-1">
+                <div className="flex items-center gap-2">
+                  <Eye className="w-3.5 h-3.5 text-muted-foreground" />
+                  <span className="text-xs font-semibold text-muted-foreground">실제 페이지 미리보기</span>
+                </div>
+                {editingId && (
+                  <a
+                    href={`/proposals/p/${enrichedProposals.find((p) => p.id === editingId)?.slug ?? ""}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <Button variant="ghost" size="sm" className="h-7 text-xs gap-1.5 text-green-600 hover:text-green-700">
+                      <ExternalLink className="w-3 h-3" />
+                      새 탭에서 보기
+                    </Button>
+                  </a>
+                )}
+              </div>
 
-                  <div className="p-6 space-y-6">
-                    {/* Preview: Title */}
-                    <div>
-                      <h1 className="text-xl font-bold text-foreground leading-tight">
+              {/* Preview container — simulates public page */}
+              <div className="border border-border/50 rounded-xl overflow-hidden bg-background shadow-sm">
+                {/* Preview: Hero */}
+                {form.hero_image_url ? (
+                  <div className="relative w-full aspect-[16/9] overflow-hidden bg-muted">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={form.hero_image_url} alt="Hero" className="w-full h-full object-cover"
+                      onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/30 to-transparent" />
+                    <div className="absolute inset-x-0 bottom-0 px-5 pb-5">
+                      <h1 className="text-xl sm:text-2xl font-bold text-white leading-tight tracking-tight drop-shadow-lg">
                         {form.title || "제안서 제목"}
                       </h1>
-                      <div className="flex items-center gap-2 mt-2">
-                        <Badge variant="outline" className="text-[10px]">
-                          {LANGUAGE_OPTIONS.find((o) => o.value === form.language)?.label || form.language}
-                        </Badge>
-                      </div>
                     </div>
+                  </div>
+                ) : (
+                  <div className="relative bg-gradient-to-br from-primary/10 via-background to-primary/5 px-5 pt-8 pb-6">
+                    <h1 className="text-xl sm:text-2xl font-bold text-foreground leading-tight tracking-tight">
+                      {form.title || "제안서 제목"}
+                    </h1>
+                  </div>
+                )}
 
-                    {/* Preview: Mission */}
-                    {form.mission_html && (
-                      <div className="space-y-2">
-                        <div className="flex items-center gap-2">
-                          <div className="w-1 h-4 rounded-full bg-primary" />
-                          <h3 className="text-sm font-semibold text-foreground uppercase tracking-wider">Mission</h3>
-                        </div>
-                        <div className="pl-3 border-l-2 border-border/50">
-                          {renderHtmlContent(form.mission_html)}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Preview: Mission Images */}
-                    {form.mission_images.filter(Boolean).length > 0 && (
-                      <div className="grid grid-cols-2 gap-2">
-                        {form.mission_images.filter(Boolean).map((url, i) => (
-                          <div key={i} className="aspect-square bg-muted rounded-xl overflow-hidden border border-border/30">
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img
-                              src={url}
-                              alt={`Mission ${i + 1}`}
-                              className="w-full h-full object-cover"
-                              onError={(e) => {
-                                (e.target as HTMLImageElement).style.display = "none";
-                              }}
-                            />
-                          </div>
-                        ))}
-                      </div>
-                    )}
-
-                    {/* Preview: Rewards */}
-                    {form.rewards_html && (
-                      <div className="space-y-2">
-                        <div className="flex items-center gap-2">
-                          <div className="w-1 h-4 rounded-full bg-primary" />
-                          <h3 className="text-sm font-semibold text-foreground uppercase tracking-wider">Rewards</h3>
-                        </div>
-                        <div className="pl-3 border-l-2 border-border/50">
-                          {renderHtmlContent(form.rewards_html)}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Preview: Products */}
-                    {form.products.length > 0 && (
-                      <div className="space-y-3">
-                        <div className="flex items-center gap-2">
-                          <div className="w-1 h-4 rounded-full bg-primary" />
-                          <h3 className="text-sm font-semibold text-foreground uppercase tracking-wider">Products</h3>
-                        </div>
-                        <div className="grid gap-3">
-                          {form.products.map((product, i) => (
-                            <div key={i} className="flex gap-3 p-3 rounded-xl border border-border/30 bg-muted/20">
-                              {product.image_url && (
-                                <div className="w-16 h-16 bg-muted rounded-lg overflow-hidden flex-shrink-0 border border-border/30">
-                                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                                  <img
-                                    src={product.image_url}
-                                    alt={product.name}
-                                    className="w-full h-full object-cover"
-                                    onError={(e) => {
-                                      (e.target as HTMLImageElement).style.display = "none";
-                                    }}
-                                  />
-                                </div>
-                              )}
-                              <div className="min-w-0">
-                                <p className="font-medium text-sm text-foreground truncate">
-                                  {product.name || "제품명"}
-                                </p>
-                                {product.description && (
-                                  <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
-                                    {product.description}
-                                  </p>
-                                )}
-                              </div>
+                {/* Preview: Content sections */}
+                <div className="px-5 divide-y divide-border/40">
+                  {/* Mission — admin-authored Tiptap content rendered via renderHtmlContent */}
+                  {form.mission_html && (
+                    <section className="py-6">
+                      <PreviewSectionHeader icon="mission" title="미션" />
+                      {renderHtmlContent(form.mission_html)}
+                      {form.mission_images.filter(Boolean).length > 0 && (
+                        <div className={`mt-4 grid gap-2 ${form.mission_images.filter(Boolean).length === 1 ? "grid-cols-1" : "grid-cols-2"}`}>
+                          {form.mission_images.filter(Boolean).map((url, i) => (
+                            <div key={i} className="rounded-xl overflow-hidden bg-muted border border-border/30">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img src={url} alt={`Reference ${i + 1}`} className="w-full h-auto object-cover aspect-square"
+                                onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
                             </div>
                           ))}
                         </div>
-                      </div>
-                    )}
+                      )}
+                    </section>
+                  )}
 
-                    {/* Preview: Required Tags */}
-                    {form.required_tags.length > 0 && (
-                      <div className="space-y-2">
-                        <div className="flex items-center gap-2">
-                          <div className="w-1 h-4 rounded-full bg-primary" />
-                          <h3 className="text-sm font-semibold text-foreground uppercase tracking-wider">Required Tags</h3>
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          {form.required_tags.map((tag, i) => (
-                            <span
-                              key={i}
-                              className="px-3 py-1 bg-primary/10 text-primary rounded-full text-xs font-medium border border-primary/20"
-                            >
-                              {tag}
-                            </span>
-                          ))}
-                        </div>
+                  {/* Products */}
+                  {form.products.length > 0 && (
+                    <section className="py-6">
+                      <PreviewSectionHeader icon="product" title="제품 소개" />
+                      <div className="space-y-3">
+                        {form.products.map((product, i) => (
+                          <div key={i} className="rounded-xl border border-border bg-card shadow-sm overflow-hidden flex">
+                            {product.image_url && (
+                              <div className="w-24 h-24 flex-shrink-0 bg-muted">
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img src={product.image_url} alt={product.name} className="w-full h-full object-cover"
+                                  onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                              </div>
+                            )}
+                            <div className="p-3 flex-1 flex flex-col justify-center">
+                              <h3 className="font-semibold text-foreground text-sm leading-snug">{product.name || "제품명"}</h3>
+                              {product.description && (
+                                <p className="text-muted-foreground mt-1 text-xs leading-relaxed line-clamp-2">{product.description}</p>
+                              )}
+                            </div>
+                          </div>
+                        ))}
                       </div>
-                    )}
+                    </section>
+                  )}
 
-                    {/* Preview: Form placeholder */}
-                    <div className="border-2 border-dashed border-border/50 rounded-xl p-5 text-center bg-muted/10">
-                      <p className="text-xs font-medium text-muted-foreground mb-2">신청 폼 영역</p>
-                      <div className="flex flex-wrap justify-center gap-1.5">
-                        {form.collect_basic_info && <Badge variant="outline" className="text-[10px]">기본 정보</Badge>}
+                  {/* Rewards — admin-authored Tiptap content */}
+                  {form.rewards_html && (
+                    <section className="py-6">
+                      <PreviewSectionHeader icon="reward" title="리워드" />
+                      <div className="rounded-xl border border-primary/20 bg-primary/5 p-4">
+                        {renderHtmlContent(form.rewards_html)}
+                      </div>
+                    </section>
+                  )}
+
+                  {/* Required Tags */}
+                  {form.required_tags.length > 0 && (
+                    <section className="py-6">
+                      <PreviewSectionHeader icon="tag" title="필수 태그" />
+                      <div className="flex flex-wrap gap-2">
+                        {form.required_tags.map((tag, i) => (
+                          <span key={i} className="inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold bg-primary/10 text-primary border border-primary/20">
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                    </section>
+                  )}
+
+                  {/* Notice — admin-authored Tiptap content */}
+                  {form.notice_html && (
+                    <section className="py-6">
+                      <PreviewSectionHeader icon="notice" title="유의사항" />
+                      <div className="rounded-xl bg-muted/60 border border-border p-4">
+                        {renderHtmlContent(form.notice_html)}
+                      </div>
+                    </section>
+                  )}
+
+                  {/* CS Channel CTA */}
+                  {form.cs_channel && form.cs_account && (
+                    <section className="py-6">
+                      <div className="text-center">
+                        <p className="text-xs text-muted-foreground mb-3">궁금한 점이 있으신가요?</p>
+                        {isUrl(form.cs_account) ? (
+                          <a href={form.cs_account} target="_blank" rel="noopener noreferrer"
+                            className="inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-gradient-to-r from-primary to-primary/80 text-primary-foreground font-semibold text-sm shadow-lg shadow-primary/25 hover:shadow-xl transition-all">
+                            <MessageSquare className="w-4 h-4" />
+                            문의하기
+                            <ExternalLink className="w-3 h-3 opacity-70" />
+                          </a>
+                        ) : (
+                          <div className="inline-flex items-center gap-3 px-5 py-3 rounded-xl bg-card border border-border shadow-sm">
+                            <MessageSquare className="w-4 h-4 text-muted-foreground" />
+                            <div className="text-left">
+                              <p className="text-[10px] text-muted-foreground">{form.cs_channel}</p>
+                              <p className="font-semibold text-foreground text-sm">{form.cs_account}</p>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </section>
+                  )}
+
+                  {/* Application form placeholder */}
+                  <section className="py-6">
+                    <PreviewSectionHeader icon="apply" title="캠페인 신청" />
+                    <div className="rounded-xl border border-border bg-card p-5 shadow-sm space-y-3">
+                      {form.collect_basic_info && (
+                        <div className="space-y-1"><div className="h-4 w-16 bg-muted rounded" /><div className="h-9 bg-muted/50 rounded-lg border border-border/50" /></div>
+                      )}
+                      {form.collect_instagram && (
+                        <div className="space-y-1"><div className="h-4 w-24 bg-muted rounded" /><div className="h-9 bg-muted/50 rounded-lg border border-border/50" /></div>
+                      )}
+                      {form.collect_paypal && (
+                        <div className="space-y-1"><div className="h-4 w-20 bg-muted rounded" /><div className="h-9 bg-muted/50 rounded-lg border border-border/50" /></div>
+                      )}
+                      {form.collect_shipping && (
+                        <div className="space-y-1"><div className="h-4 w-16 bg-muted rounded" /><div className="h-20 bg-muted/50 rounded-lg border border-border/50" /></div>
+                      )}
+                      <div className="flex flex-wrap gap-1.5 pt-2">
+                        {form.collect_basic_info && <Badge variant="outline" className="text-[10px]">이름/이메일/전화</Badge>}
                         {form.collect_instagram && <Badge variant="outline" className="text-[10px]">Instagram ID</Badge>}
                         {form.collect_paypal && <Badge variant="outline" className="text-[10px]">PayPal</Badge>}
                         {form.collect_shipping && <Badge variant="outline" className="text-[10px]">배송지</Badge>}
                       </div>
+                      <div className="h-10 bg-primary/20 rounded-lg flex items-center justify-center">
+                        <span className="text-xs font-semibold text-primary">신청하기</span>
+                      </div>
                     </div>
-
-                    {/* Preview: CS Channel */}
-                    {form.cs_channel && form.cs_account && (
-                      <div className="text-center text-xs text-muted-foreground p-3 bg-muted/30 rounded-lg">
-                        {isUrl(form.cs_account) ? (
-                          <p>
-                            문의: {form.cs_channel} -{" "}
-                            <a
-                              href={form.cs_account}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-primary hover:underline inline-flex items-center gap-1"
-                            >
-                              링크 열기
-                              <ExternalLink className="w-3 h-3" />
-                            </a>
-                          </p>
-                        ) : (
-                          <p>
-                            문의: {form.cs_channel} - {form.cs_account}
-                          </p>
-                        )}
-                      </div>
-                    )}
-
-                    {/* Preview: Notice */}
-                    {form.notice_html && (
-                      <div className="border-t border-border/50 pt-4 space-y-2">
-                        <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Notice</h3>
-                        <div className="text-muted-foreground text-xs">
-                          {renderHtmlContent(form.notice_html)}
-                        </div>
-                      </div>
-                    )}
-                  </div>
+                  </section>
                 </div>
-              </CardContent>
-            </Card>
+
+                {/* Preview: Footer */}
+                <div className="text-center py-6 border-t border-border mx-5">
+                  <span className="text-[10px] text-muted-foreground/60 font-medium tracking-wider uppercase">Powered by Uncustom</span>
+                </div>
+              </div>
+            </div>
           </div>
 
           {/* RIGHT: Floating Section Navigation Badges */}
@@ -1874,6 +1946,21 @@ function ProposalCard({
           </div>
         </div>
 
+        {/* Published URL display */}
+        {isPublished && (
+          <div
+            className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-green-500/5 border border-green-500/20 cursor-pointer hover:bg-green-500/10 transition-colors"
+            onClick={(e) => { e.stopPropagation(); onCopyUrl(); }}
+            title="클릭하여 URL 복사"
+          >
+            <Globe className="w-3 h-3 text-green-500 flex-shrink-0" />
+            <code className="text-[10px] text-green-700 dark:text-green-400 truncate font-mono flex-1">
+              /proposals/p/{proposal.slug}
+            </code>
+            <Copy className="w-3 h-3 text-green-500/60 flex-shrink-0" />
+          </div>
+        )}
+
         {/* Bottom row: Responses + URL */}
         <div className="flex items-center justify-between pt-2 border-t border-border/30">
           {/* Response count */}
@@ -1891,29 +1978,20 @@ function ProposalCard({
             응답 {responseCount}건
           </button>
 
-          {/* Public URL */}
+          {/* Actions */}
           {isPublished ? (
-            <div className="flex items-center gap-1">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={(e) => { e.stopPropagation(); onCopyUrl(); }}
-                className="h-7 gap-1.5 text-xs text-green-600 hover:text-green-700 hover:bg-green-500/10"
-              >
-                <Globe className="w-3 h-3" />
-                URL 복사
+            <a
+              href={`/proposals/p/${proposal.slug}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <Button variant="ghost" size="sm" className="h-7 gap-1.5 text-xs text-green-600 hover:text-green-700 hover:bg-green-500/10">
+                <Eye className="w-3 h-3" />
+                미리보기
+                <ExternalLink className="w-3 h-3" />
               </Button>
-              <a
-                href={`/proposals/p/${proposal.slug}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <Button variant="ghost" size="icon" className="h-7 w-7 text-green-600 hover:text-green-700 hover:bg-green-500/10">
-                  <ExternalLink className="w-3 h-3" />
-                </Button>
-              </a>
-            </div>
+            </a>
           ) : isClosed ? (
             <span className="text-[10px] text-red-500/70 font-medium">마감됨</span>
           ) : (
@@ -1922,5 +2000,29 @@ function ProposalCard({
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+// ============================================================
+// PREVIEW SECTION HEADER — matches public page SectionHeader
+// ============================================================
+
+const PREVIEW_ICONS: Record<string, React.ReactNode> = {
+  mission: <Target className="w-4 h-4" />,
+  product: <Package className="w-4 h-4" />,
+  reward: <Gift className="w-4 h-4" />,
+  tag: <Hash className="w-4 h-4" />,
+  notice: <Bell className="w-4 h-4" />,
+  apply: <Pencil className="w-4 h-4" />,
+};
+
+function PreviewSectionHeader({ icon, title }: { icon: string; title: string }) {
+  return (
+    <div className="flex items-center gap-2.5 mb-4">
+      <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-primary/10 text-primary flex-shrink-0">
+        {PREVIEW_ICONS[icon] ?? <Target className="w-4 h-4" />}
+      </div>
+      <h2 className="text-base font-bold text-foreground tracking-tight">{title}</h2>
+    </div>
   );
 }
