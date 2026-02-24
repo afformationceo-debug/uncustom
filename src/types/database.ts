@@ -304,6 +304,9 @@ export type Database = {
           mentions: string[] | null;
           music_info: Json | null;
           product_type: string | null;
+          real_name: string | null;
+          birth_date: string | null;
+          phone: string | null;
           last_updated_at: string;
           created_at: string;
         };
@@ -366,6 +369,9 @@ export type Database = {
           mentions?: string[] | null;
           music_info?: Json | null;
           product_type?: string | null;
+          real_name?: string | null;
+          birth_date?: string | null;
+          phone?: string | null;
           last_updated_at?: string;
           created_at?: string;
         };
@@ -428,6 +434,9 @@ export type Database = {
           mentions?: string[] | null;
           music_info?: Json | null;
           product_type?: string | null;
+          real_name?: string | null;
+          birth_date?: string | null;
+          phone?: string | null;
           last_updated_at?: string;
           created_at?: string;
         };

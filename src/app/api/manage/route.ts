@@ -38,7 +38,7 @@ export async function GET(request: Request) {
       .from("campaign_influencers")
       .select(
         `*,
-        influencer:influencers!inner(id, username, display_name, email, platform, follower_count, profile_image_url, profile_url),
+        influencer:influencers!inner(id, username, display_name, email, platform, follower_count, profile_image_url, profile_url, real_name, birth_date, phone),
         campaign:campaigns!campaign_id(id, name, campaign_type)`,
         { count: "exact" }
       );

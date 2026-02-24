@@ -15,6 +15,7 @@ import {
 } from "@/types/platform";
 import { InlineCurrencyInput } from "./inline-currency-input";
 import { InlineSettlementEditor } from "./inline-settlement-editor";
+import { InlineInfluencerInfoEditor } from "./inline-influencer-info-editor";
 import { Mail, Users, ExternalLink, StickyNote, BarChart3 } from "lucide-react";
 import type { Tables, Json } from "@/types/database";
 
@@ -265,6 +266,25 @@ export const ALL_COLUMNS: ColumnDef[] = [
         <a href={inf.profile_url} target="_blank" rel="noopener noreferrer">
           <ExternalLink className="w-3 h-3 text-muted-foreground hover:text-foreground" />
         </a>
+      );
+    },
+  },
+
+  {
+    key: "influencer_info",
+    label: "인플정보",
+    group: "basic",
+    render: (item) => {
+      const inf = item.influencer as unknown as Tables<"influencers"> | undefined;
+      if (!inf) return <span className="text-muted-foreground text-[10px]">-</span>;
+      return (
+        <InlineInfluencerInfoEditor
+          influencerId={inf.id}
+          realName={inf.real_name ?? null}
+          birthDate={inf.birth_date ?? null}
+          phone={inf.phone ?? null}
+          displayName={inf.display_name ?? null}
+        />
       );
     },
   },
