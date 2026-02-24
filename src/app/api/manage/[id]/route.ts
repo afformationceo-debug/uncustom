@@ -12,6 +12,8 @@ const BOOLEAN_TIMESTAMP_MAP: Record<string, string> = {
   guideline_sent: "guideline_sent_at",
   crm_registered: "crm_registered_at",
   visit_completed: "visit_completed_at",
+  shipping_sent: "shipping_sent_at",
+  shipping_received: "shipping_received_at",
 };
 
 // Funnel status priority order (higher index = more advanced)
@@ -42,7 +44,9 @@ function autoCalculateFunnelStatus(merged: Record<string, unknown>): FunnelStatu
   if (merged.upload_url) return "uploaded";
   if (merged.actual_upload_date) return "uploaded";
   if (merged.upload_deadline) return "upload_pending";
+  if (merged.shipping_received === true) return "visited";
   if (merged.visit_completed === true) return "visited";
+  if (merged.shipping_sent === true) return "visit_scheduled";
   if (merged.visit_scheduled_date) return "visit_scheduled";
   if (merged.crm_registered === true) return "crm_registered";
   if (merged.guideline_sent === true) return "guideline_sent";

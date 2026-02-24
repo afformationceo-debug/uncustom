@@ -19,16 +19,17 @@ import type { Tables, Json } from "@/types/database";
 
 type CampaignInfluencer = Tables<"campaign_influencers"> & {
   influencer?: Tables<"influencers">;
-  campaign?: { id: string; name: string };
+  campaign?: { id: string; name: string; campaign_type?: string };
 };
 
-export type ColumnGroup = "basic" | "outreach" | "confirm" | "execution" | "content" | "settlement";
+export type ColumnGroup = "basic" | "outreach" | "confirm" | "execution" | "shipping" | "content" | "settlement";
 
 export const COLUMN_GROUPS: { value: ColumnGroup; label: string }[] = [
   { value: "basic", label: "기본" },
   { value: "outreach", label: "아웃리치" },
   { value: "confirm", label: "컨펌" },
-  { value: "execution", label: "실행" },
+  { value: "execution", label: "실행(방문)" },
+  { value: "shipping", label: "실행(배송)" },
   { value: "content", label: "콘텐츠" },
   { value: "settlement", label: "정산" },
 ];
@@ -455,6 +456,31 @@ export const ALL_COLUMNS: ColumnDef[] = [
     ),
   },
   {
+    key: "interpreter_needed",
+    label: "통역배치",
+    group: "execution",
+    render: (item, onUpdate) => (
+      <Switch
+        checked={item.interpreter_needed}
+        onCheckedChange={(v) => onUpdate(item.id, "interpreter_needed", v)}
+        className="scale-75"
+      />
+    ),
+  },
+  {
+    key: "interpreter_name",
+    label: "통역사",
+    group: "execution",
+    render: (item, onUpdate) => (
+      <InlineText
+        value={item.interpreter_name}
+        placeholder="통역사 이름"
+        onSave={(v) => onUpdate(item.id, "interpreter_name", v)}
+        className="w-24"
+      />
+    ),
+  },
+  {
     key: "visit_completed",
     label: "방문완료",
     group: "execution",
@@ -462,6 +488,58 @@ export const ALL_COLUMNS: ColumnDef[] = [
       <Switch
         checked={item.visit_completed}
         onCheckedChange={(v) => onUpdate(item.id, "visit_completed", v)}
+        className="scale-75"
+      />
+    ),
+  },
+
+  // === SHIPPING (배송형) ===
+  {
+    key: "tracking_number",
+    label: "운송장번호",
+    group: "shipping",
+    render: (item, onUpdate) => (
+      <InlineText
+        value={item.tracking_number}
+        placeholder="운송장"
+        onSave={(v) => onUpdate(item.id, "tracking_number", v)}
+        className="w-28"
+      />
+    ),
+  },
+  {
+    key: "shipping_address",
+    label: "배송주소",
+    group: "shipping",
+    render: (item, onUpdate) => (
+      <InlineText
+        value={item.shipping_address}
+        placeholder="주소"
+        onSave={(v) => onUpdate(item.id, "shipping_address", v)}
+        className="w-32"
+      />
+    ),
+  },
+  {
+    key: "shipping_sent",
+    label: "배송완료",
+    group: "shipping",
+    render: (item, onUpdate) => (
+      <Switch
+        checked={item.shipping_sent}
+        onCheckedChange={(v) => onUpdate(item.id, "shipping_sent", v)}
+        className="scale-75"
+      />
+    ),
+  },
+  {
+    key: "shipping_received",
+    label: "수령완료",
+    group: "shipping",
+    render: (item, onUpdate) => (
+      <Switch
+        checked={item.shipping_received}
+        onCheckedChange={(v) => onUpdate(item.id, "shipping_received", v)}
         className="scale-75"
       />
     ),

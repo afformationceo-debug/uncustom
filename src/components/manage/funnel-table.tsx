@@ -13,21 +13,22 @@ import type { Tables } from "@/types/database";
 
 type CampaignInfluencer = Tables<"campaign_influencers"> & {
   influencer?: Tables<"influencers">;
-  campaign?: { id: string; name: string };
+  campaign?: { id: string; name: string; campaign_type?: string };
 };
 
-export type GroupByKey = "none" | "campaign" | "platform" | "funnel_status";
+export type GroupByKey = "none" | "campaign" | "platform" | "funnel_status" | "campaign_type";
 
 const GROUP_OPTIONS: { value: GroupByKey; label: string }[] = [
   { value: "none", label: "없음" },
   { value: "campaign", label: "캠페인별" },
   { value: "platform", label: "플랫폼별" },
   { value: "funnel_status", label: "퍼널상태별" },
+  { value: "campaign_type", label: "캠페인유형별" },
 ];
 
 function getGroupKey(item: CampaignInfluencer, groupBy: GroupByKey): string {
   if (groupBy === "campaign") {
-    return (item.campaign as { id: string; name: string } | undefined)?.name ?? "미지정";
+    return (item.campaign as { id: string; name: string; campaign_type?: string } | undefined)?.name ?? "미지정";
   }
   if (groupBy === "platform") {
     const inf = item.influencer as unknown as Tables<"influencers"> | undefined;
@@ -35,6 +36,9 @@ function getGroupKey(item: CampaignInfluencer, groupBy: GroupByKey): string {
   }
   if (groupBy === "funnel_status") {
     return item.funnel_status ?? "extracted";
+  }
+  if (groupBy === "campaign_type") {
+    return (item.campaign as { campaign_type?: string } | undefined)?.campaign_type ?? "visit";
   }
   return "";
 }
@@ -45,6 +49,9 @@ function getGroupLabel(key: string, groupBy: GroupByKey): string {
   }
   if (groupBy === "funnel_status") {
     return FUNNEL_STATUSES.find((s) => s.value === key)?.label ?? key;
+  }
+  if (groupBy === "campaign_type") {
+    return key === "shipping" ? "배송형" : "방문형";
   }
   return key;
 }

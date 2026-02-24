@@ -117,6 +117,13 @@ export const CLIENT_PAYMENT_STATUSES: { value: ClientPaymentStatus; label: strin
   { value: "paid", label: "수금완료", color: "#10B981" },
 ];
 
+export type CampaignType = "visit" | "shipping";
+
+export const CAMPAIGN_TYPES: { value: CampaignType; label: string }[] = [
+  { value: "visit", label: "방문형" },
+  { value: "shipping", label: "배송형" },
+];
+
 export type OutreachType = "email" | "dm";
 
 export const OUTREACH_TYPES: { value: OutreachType; label: string }[] = [

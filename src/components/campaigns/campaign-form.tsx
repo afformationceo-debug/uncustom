@@ -47,6 +47,11 @@ const TARGET_PLATFORMS = [
   { value: "twitter", label: "Twitter/X", dot: "bg-blue-400" },
 ] as const;
 
+const CAMPAIGN_TYPE_OPTIONS = [
+  { value: "visit", label: "방문형", desc: "인플루언서가 매장/장소를 방문" },
+  { value: "shipping", label: "배송형", desc: "제품을 인플루언서에게 배송" },
+] as const;
+
 interface CampaignFormProps {
   teamId: string;
   trigger?: React.ReactNode;
@@ -54,6 +59,7 @@ interface CampaignFormProps {
     id: string;
     name: string;
     description: string | null;
+    campaign_type?: string;
     target_countries?: string[];
     target_platforms?: string[];
   };
@@ -67,6 +73,7 @@ export function CampaignForm({ teamId, trigger, campaign }: CampaignFormProps) {
   const [loading, setLoading] = useState(false);
   const [name, setName] = useState(campaign?.name ?? "");
   const [description, setDescription] = useState(campaign?.description ?? "");
+  const [campaignType, setCampaignType] = useState(campaign?.campaign_type ?? "visit");
   const [targetCountries, setTargetCountries] = useState<string[]>(campaign?.target_countries ?? []);
   const [targetPlatforms, setTargetPlatforms] = useState<string[]>(campaign?.target_platforms ?? []);
 
@@ -95,6 +102,7 @@ export function CampaignForm({ teamId, trigger, campaign }: CampaignFormProps) {
           .update({
             name: name.trim(),
             description: description.trim() || null,
+            campaign_type: campaignType,
             target_countries: targetCountries,
             target_platforms: targetPlatforms,
             updated_at: new Date().toISOString(),
@@ -106,6 +114,7 @@ export function CampaignForm({ teamId, trigger, campaign }: CampaignFormProps) {
           team_id: teamId,
           name: name.trim(),
           description: description.trim() || null,
+          campaign_type: campaignType,
           target_countries: targetCountries,
           target_platforms: targetPlatforms,
         });
@@ -162,6 +171,31 @@ export function CampaignForm({ teamId, trigger, campaign }: CampaignFormProps) {
                 onChange={(e) => setDescription(e.target.value)}
                 rows={3}
               />
+            </div>
+
+            {/* Campaign Type */}
+            <div className="grid gap-2">
+              <Label>캠페인 유형</Label>
+              <div className="flex gap-2">
+                {CAMPAIGN_TYPE_OPTIONS.map((t) => {
+                  const isActive = campaignType === t.value;
+                  return (
+                    <button
+                      key={t.value}
+                      type="button"
+                      onClick={() => setCampaignType(t.value)}
+                      className={`flex-1 flex flex-col items-center gap-1 px-3 py-2.5 rounded-lg border text-xs transition-colors ${
+                        isActive
+                          ? "border-primary bg-primary/10 text-primary font-medium"
+                          : "border-border text-muted-foreground hover:border-primary/30"
+                      }`}
+                    >
+                      <span className="font-medium">{t.label}</span>
+                      <span className="text-[10px] opacity-70">{t.desc}</span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
             {/* Target Platforms */}

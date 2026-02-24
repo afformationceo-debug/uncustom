@@ -27,7 +27,7 @@ import { FunnelExportButton } from "@/components/manage/funnel-export-button";
 
 type CampaignInfluencer = Tables<"campaign_influencers"> & {
   influencer?: Tables<"influencers">;
-  campaign?: { id: string; name: string };
+  campaign?: { id: string; name: string; campaign_type?: string };
 };
 
 export default function ManagePage() {
