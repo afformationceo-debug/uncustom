@@ -36,7 +36,7 @@ const FUNNEL_ORDER: FunnelStatus[] = [
 /**
  * Auto-calculate funnel_status based on field values.
  * Merges current record + incoming updates, then returns the highest applicable status.
- * Only advances forward (never goes backward), unless manually set.
+ * Works bidirectionally — status can advance or regress based on current field state.
  */
 function autoCalculateFunnelStatus(merged: Record<string, unknown>): FunnelStatus {
   // Check from highest to lowest — return the first (highest) match
@@ -123,8 +123,8 @@ export async function PATCH(
       const currentIndex = getFunnelIndex(record.funnel_status as FunnelStatus);
       const calculatedIndex = getFunnelIndex(calculatedStatus);
 
-      // Only advance forward
-      if (calculatedIndex > currentIndex) {
+      // Bidirectional: update whenever calculated status differs from current
+      if (calculatedIndex !== currentIndex) {
         updatePayload.funnel_status = calculatedStatus;
         logs.push({
           field_name: "funnel_status",
