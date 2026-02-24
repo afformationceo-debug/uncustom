@@ -15,11 +15,11 @@ import { LayoutGrid } from "lucide-react";
 import type { Tables } from "@/types/database";
 import type { ColumnGroup } from "@/components/manage/funnel-columns";
 import type { ManageFilters } from "@/components/manage/funnel-filters";
+import type { GroupByKey } from "@/components/manage/funnel-table";
 
 import { FunnelSummary } from "@/components/manage/funnel-summary";
 import { FunnelTable } from "@/components/manage/funnel-table";
 import { FunnelFilters, DEFAULT_FILTERS } from "@/components/manage/funnel-filters";
-import { FunnelAdvancedFilters } from "@/components/manage/funnel-advanced-filters";
 import { FunnelPagination } from "@/components/manage/funnel-pagination";
 import { FunnelDetailPanel } from "@/components/manage/funnel-detail-panel";
 import { FunnelBulkActions } from "@/components/manage/funnel-bulk-actions";
@@ -73,10 +73,12 @@ function ManagePageContent() {
 
   // Filters
   const [filters, setFilters] = useState<ManageFilters>(DEFAULT_FILTERS);
-  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   // Column groups
   const [activeGroups, setActiveGroups] = useState<ColumnGroup[]>(loadColumnGroups);
+
+  // Grouping
+  const [groupBy, setGroupBy] = useState<GroupByKey>("none");
 
   // Selection
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -296,20 +298,11 @@ function ManagePageContent() {
       {/* Summary bar */}
       <FunnelSummary campaignId={campaignId} refreshKey={summaryKey} />
 
-      {/* Filters */}
+      {/* Filters — inline multi-filter dropdowns */}
       <FunnelFilters
         filters={filters}
         statusCounts={statusCounts}
         total={total}
-        onFiltersChange={handleFiltersChange}
-        onAdvancedOpen={() => setAdvancedOpen(true)}
-      />
-
-      {/* Advanced filters sheet */}
-      <FunnelAdvancedFilters
-        open={advancedOpen}
-        onOpenChange={setAdvancedOpen}
-        filters={filters}
         onFiltersChange={handleFiltersChange}
       />
 
@@ -321,6 +314,8 @@ function ManagePageContent() {
         onSelectionChange={setSelectedIds}
         activeGroups={activeGroups}
         onGroupsChange={setActiveGroups}
+        groupBy={groupBy}
+        onGroupByChange={setGroupBy}
         onUpdate={handleUpdate}
         onNoteEdit={handleNoteEdit}
         onRowClick={setDetailItem}
