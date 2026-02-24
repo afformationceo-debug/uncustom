@@ -59,6 +59,12 @@ import {
   FileSpreadsheet,
   Loader2,
   Zap,
+  ArrowRight,
+  Calendar,
+  DollarSign,
+  Send,
+  Briefcase,
+  User,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -69,14 +75,40 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
 import type { Tables } from "@/types/database";
-import { PLATFORMS } from "@/types/platform";
+import { PLATFORMS, FUNNEL_STATUSES } from "@/types/platform";
+import type { FunnelStatus } from "@/types/platform";
 import { useRealtime } from "@/hooks/use-realtime";
 
 type Influencer = Tables<"influencers">;
 type Campaign = Tables<"campaigns">;
 type InfluencerLink = Tables<"influencer_links">;
 
-type CampaignAssignmentMap = Record<string, { id: string; name: string }[]>;
+type CampaignAssignment = {
+  id: string; // campaign_influencer id
+  campaign_id: string;
+  name: string;
+  campaign_type: string | null;
+  campaign_status: string | null;
+  funnel_status: string;
+  outreach_round: number;
+  last_outreach_at: string | null;
+  reply_date: string | null;
+  interest_confirmed: boolean;
+  client_approved: boolean;
+  final_confirmed: boolean;
+  visit_scheduled_date: string | null;
+  visit_completed: boolean;
+  upload_deadline: string | null;
+  actual_upload_date: string | null;
+  upload_url: string | null;
+  payment_amount: number | null;
+  payment_currency: string | null;
+  influencer_payment_status: string | null;
+  client_payment_status: string | null;
+  notes: string | null;
+  created_at: string;
+};
+type CampaignAssignmentMap = Record<string, CampaignAssignment[]>;
 type SortField = string; // Any DB column name
 type SortDir = "asc" | "desc";
 type PlatformFilter = "instagram" | "tiktok" | "youtube" | "twitter";
@@ -1576,19 +1608,73 @@ export default function MasterPage() {
     if (influencerIds.length === 0) return;
     const { data } = await supabase
       .from("campaign_influencers")
-      .select("influencer_id, campaign_id, campaigns(id, name)")
+      .select(`
+        id, influencer_id, campaign_id, funnel_status, status,
+        outreach_round, last_outreach_at, reply_date,
+        interest_confirmed, client_approved, final_confirmed,
+        visit_scheduled_date, visit_completed,
+        upload_deadline, actual_upload_date, upload_url,
+        payment_amount, payment_currency,
+        influencer_payment_status, client_payment_status,
+        notes, created_at,
+        campaign:campaigns!campaign_id(id, name, campaign_type, status)
+      `)
       .in("influencer_id", influencerIds);
 
     if (data) {
       const map: CampaignAssignmentMap = {};
       for (const row of data as unknown as {
+        id: string;
         influencer_id: string;
         campaign_id: string;
-        campaigns: { id: string; name: string };
+        funnel_status: string;
+        status: string;
+        outreach_round: number;
+        last_outreach_at: string | null;
+        reply_date: string | null;
+        interest_confirmed: boolean;
+        client_approved: boolean;
+        final_confirmed: boolean;
+        visit_scheduled_date: string | null;
+        visit_completed: boolean;
+        upload_deadline: string | null;
+        actual_upload_date: string | null;
+        upload_url: string | null;
+        payment_amount: number | null;
+        payment_currency: string | null;
+        influencer_payment_status: string | null;
+        client_payment_status: string | null;
+        notes: string | null;
+        created_at: string;
+        campaign: { id: string; name: string; campaign_type: string | null; status: string | null };
       }[]) {
         if (!map[row.influencer_id]) map[row.influencer_id] = [];
-        if (row.campaigns) {
-          map[row.influencer_id].push({ id: row.campaigns.id, name: row.campaigns.name });
+        if (row.campaign) {
+          map[row.influencer_id].push({
+            id: row.id,
+            campaign_id: row.campaign.id,
+            name: row.campaign.name,
+            campaign_type: row.campaign.campaign_type,
+            campaign_status: row.campaign.status,
+            funnel_status: row.funnel_status ?? "extracted",
+            outreach_round: row.outreach_round ?? 0,
+            last_outreach_at: row.last_outreach_at,
+            reply_date: row.reply_date,
+            interest_confirmed: row.interest_confirmed ?? false,
+            client_approved: row.client_approved ?? false,
+            final_confirmed: row.final_confirmed ?? false,
+            visit_scheduled_date: row.visit_scheduled_date,
+            visit_completed: row.visit_completed ?? false,
+            upload_deadline: row.upload_deadline,
+            actual_upload_date: row.actual_upload_date,
+            upload_url: row.upload_url,
+            payment_amount: row.payment_amount,
+            payment_currency: row.payment_currency,
+            influencer_payment_status: row.influencer_payment_status,
+            client_payment_status: row.client_payment_status,
+            notes: row.notes,
+            created_at: row.created_at,
+          });
         }
       }
       setCampaignAssignments(map);
@@ -2658,9 +2744,18 @@ export default function MasterPage() {
                       <p className="text-xs text-muted-foreground line-clamp-2 mb-2">{inf.bio}</p>
                     )}
                     <div className="flex items-center gap-1.5 flex-wrap mb-2">
-                      {assignments.map((c) => (
-                        <Badge key={c.id} variant="secondary" className="text-[10px]">{c.name}</Badge>
-                      ))}
+                      {assignments.map((a) => {
+                        const fInfo = FUNNEL_STATUSES.find((f) => f.value === a.funnel_status);
+                        return (
+                          <a key={a.id} href={`/manage?campaign=${a.campaign_id}`} onClick={(e) => e.stopPropagation()}>
+                            <Badge variant="secondary" className="text-[10px] gap-1 cursor-pointer hover:bg-accent transition-colors">
+                              {a.name}
+                              <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: fInfo?.color ?? "#6B7280" }} />
+                              <span style={{ color: fInfo?.color ?? "#6B7280" }}>{fInfo?.label ?? a.funnel_status}</span>
+                            </Badge>
+                          </a>
+                        );
+                      })}
                       {inf.email_source && (() => {
                         const badge = getEmailSourceBadge(inf.email_source);
                         return badge ? <span className={`text-[10px] px-1.5 py-0 rounded ${badge.className}`}>출처: {badge.label}</span> : null;
@@ -2998,7 +3093,7 @@ function ExpandedDetail({
 }: {
   inf: Influencer;
   links: InfluencerLink[];
-  assignments: { id: string; name: string }[];
+  assignments: CampaignAssignment[];
   formatCount: (n: number | null) => string;
   onOpenModal?: (post: ContentPost) => void;
 }) {
@@ -3126,6 +3221,16 @@ function ExpandedDetail({
             </div>
           )}
 
+          {/* Personal Info (real_name, birth_date, phone) */}
+          {(inf.real_name || inf.birth_date || inf.phone) && (
+            <div className="flex items-center gap-3 text-sm">
+              <User className="w-3.5 h-3.5 text-muted-foreground" />
+              {inf.real_name && <span className="font-medium">{inf.real_name}</span>}
+              {inf.birth_date && <span className="text-muted-foreground">{new Date(inf.birth_date).toLocaleDateString("ko-KR")}</span>}
+              {inf.phone && <span className="text-muted-foreground">{inf.phone}</span>}
+            </div>
+          )}
+
           {/* Bio */}
           {inf.bio && (
             <div className="text-sm text-muted-foreground leading-relaxed max-w-2xl whitespace-pre-wrap">
@@ -3151,13 +3256,170 @@ function ExpandedDetail({
         </div>
       ) : null}
 
-      {/* Campaign Assignments */}
+      {/* Collaboration History */}
       {assignments.length > 0 && (
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">배정된 캠페인:</span>
-          {assignments.map((c) => (
-            <Badge key={c.id} variant="secondary" className="text-xs">{c.name}</Badge>
-          ))}
+        <div className="space-y-2">
+          <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+            <Briefcase className="w-3.5 h-3.5" />
+            협업 이력 ({assignments.length}개 캠페인)
+          </h4>
+          <div className="grid gap-2">
+            {assignments.map((a) => {
+              const funnelInfo = FUNNEL_STATUSES.find((f) => f.value === a.funnel_status);
+              const funnelLabel = funnelInfo?.label ?? a.funnel_status;
+              const funnelColor = funnelInfo?.color ?? "#6B7280";
+              const isTerminal = a.funnel_status === "declined" || a.funnel_status === "dropped";
+              const formatDate = (d: string | null) => d ? new Date(d).toLocaleDateString("ko-KR", { year: "numeric", month: "short", day: "numeric" }) : null;
+              const formatCurrency = (amount: number | null, currency: string | null) => {
+                if (amount == null) return null;
+                const c = currency ?? "KRW";
+                return new Intl.NumberFormat("ko-KR", { style: "currency", currency: c, maximumFractionDigits: 0 }).format(amount);
+              };
+
+              return (
+                <div
+                  key={a.id}
+                  className={`border rounded-lg p-3 space-y-2 ${isTerminal ? "opacity-60 border-dashed" : "border-border"}`}
+                >
+                  {/* Campaign header row */}
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <a
+                        href={`/campaigns/${a.campaign_id}`}
+                        className="font-medium text-sm hover:text-primary transition-colors truncate"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {a.name}
+                      </a>
+                      {a.campaign_type && (
+                        <Badge variant="outline" className={`text-[10px] px-1.5 py-0 flex-shrink-0 ${
+                          a.campaign_type === "shipping"
+                            ? "border-blue-300 text-blue-600 dark:border-blue-700 dark:text-blue-400"
+                            : "border-green-300 text-green-600 dark:border-green-700 dark:text-green-400"
+                        }`}>
+                          {a.campaign_type === "shipping" ? "배송" : "방문"}
+                        </Badge>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <Badge
+                        variant="outline"
+                        className="text-[10px] px-1.5 py-0"
+                        style={{ borderColor: funnelColor, color: funnelColor }}
+                      >
+                        <div className="w-1.5 h-1.5 rounded-full mr-1" style={{ backgroundColor: funnelColor }} />
+                        {funnelLabel}
+                      </Badge>
+                      <a
+                        href={`/manage?campaign=${a.campaign_id}`}
+                        className="text-xs text-muted-foreground hover:text-primary transition-colors flex items-center gap-0.5"
+                        onClick={(e) => e.stopPropagation()}
+                        title="인플루언서 관리 페이지로 이동"
+                      >
+                        관리 <ArrowRight className="w-3 h-3" />
+                      </a>
+                    </div>
+                  </div>
+
+                  {/* Detail grid */}
+                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                    {/* Outreach */}
+                    {a.outreach_round > 0 && (
+                      <span className="flex items-center gap-1">
+                        <Send className="w-3 h-3" />
+                        {a.outreach_round}차 발송
+                        {a.last_outreach_at && ` (${formatDate(a.last_outreach_at)})`}
+                      </span>
+                    )}
+                    {a.reply_date && (
+                      <span className="flex items-center gap-1 text-violet-600 dark:text-violet-400">
+                        <MessageCircle className="w-3 h-3" />
+                        회신 {formatDate(a.reply_date)}
+                      </span>
+                    )}
+
+                    {/* Confirmations */}
+                    {a.interest_confirmed && (
+                      <span className="flex items-center gap-1 text-purple-600 dark:text-purple-400">
+                        <CheckCircle2 className="w-3 h-3" /> 희망회신
+                      </span>
+                    )}
+                    {a.client_approved && (
+                      <span className="flex items-center gap-1 text-cyan-600 dark:text-cyan-400">
+                        <CheckCircle2 className="w-3 h-3" /> 거래처컨펌
+                      </span>
+                    )}
+                    {a.final_confirmed && (
+                      <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+                        <CheckCircle2 className="w-3 h-3" /> 최종확정
+                      </span>
+                    )}
+
+                    {/* Dates */}
+                    {a.visit_scheduled_date && (
+                      <span className="flex items-center gap-1">
+                        <Calendar className="w-3 h-3" />
+                        방문 {formatDate(a.visit_scheduled_date)}
+                        {a.visit_completed && " (완료)"}
+                      </span>
+                    )}
+                    {a.upload_deadline && (
+                      <span className="flex items-center gap-1">
+                        <Clock className="w-3 h-3" />
+                        업로드마감 {formatDate(a.upload_deadline)}
+                      </span>
+                    )}
+                    {a.actual_upload_date && (
+                      <span className="flex items-center gap-1 text-orange-600 dark:text-orange-400">
+                        <Upload className="w-3 h-3" />
+                        업로드 {formatDate(a.actual_upload_date)}
+                      </span>
+                    )}
+                    {a.upload_url && (
+                      <a
+                        href={a.upload_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-1 text-blue-600 hover:text-blue-800"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <ExternalLink className="w-3 h-3" /> 콘텐츠 보기
+                      </a>
+                    )}
+
+                    {/* Payment */}
+                    {a.payment_amount != null && (
+                      <span className="flex items-center gap-1">
+                        <DollarSign className="w-3 h-3" />
+                        지급 {formatCurrency(a.payment_amount, a.payment_currency)}
+                        {a.influencer_payment_status && a.influencer_payment_status !== "unpaid" && (
+                          <Badge variant="outline" className={`text-[9px] px-1 py-0 ml-0.5 ${
+                            a.influencer_payment_status === "paid"
+                              ? "border-green-300 text-green-600"
+                              : "border-amber-300 text-amber-600"
+                          }`}>
+                            {a.influencer_payment_status === "paid" ? "완료" : "진행중"}
+                          </Badge>
+                        )}
+                      </span>
+                    )}
+
+                    {/* Assigned date */}
+                    <span className="flex items-center gap-1">
+                      배정일 {formatDate(a.created_at)}
+                    </span>
+                  </div>
+
+                  {/* Notes */}
+                  {a.notes && (
+                    <p className="text-xs text-muted-foreground bg-muted/50 rounded px-2 py-1 truncate" title={a.notes}>
+                      {a.notes}
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 

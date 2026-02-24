@@ -3,7 +3,7 @@
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ExternalLink, Mail, Users } from "lucide-react";
+import { ExternalLink, Mail, Users, Database } from "lucide-react";
 import { FUNNEL_STATUSES, PLATFORMS, INFLUENCER_PAYMENT_STATUSES, CLIENT_PAYMENT_STATUSES, REPLY_CHANNELS } from "@/types/platform";
 import { FunnelActivityTimeline } from "./funnel-activity-timeline";
 import type { Tables, Json } from "@/types/database";
@@ -84,6 +84,16 @@ export function FunnelDetailPanel({ item, open, onOpenChange }: FunnelDetailPane
               <Row label="프로필">
                 <a href={inf.profile_url} target="_blank" rel="noopener noreferrer" className="text-primary text-xs flex items-center gap-1">
                   프로필 열기 <ExternalLink className="w-3 h-3" />
+                </a>
+              </Row>
+            )}
+            {inf?.real_name && <Row label="실제 성함">{inf.real_name}</Row>}
+            {inf?.birth_date && <Row label="생년월일">{formatDate(inf.birth_date)}</Row>}
+            {inf?.phone && <Row label="연락처">{inf.phone}</Row>}
+            {inf && (
+              <Row label="마스터데이터">
+                <a href={`/master?search=${inf.username ?? ""}`} className="text-primary text-xs flex items-center gap-1">
+                  <Database className="w-3 h-3" /> 마스터데이터 보기
                 </a>
               </Row>
             )}
