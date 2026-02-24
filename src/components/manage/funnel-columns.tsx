@@ -183,29 +183,17 @@ export const ALL_COLUMNS: ColumnDef[] = [
     key: "funnel_status",
     label: "퍼널상태",
     group: "basic",
-    render: (item, onUpdate) => {
+    render: (item) => {
       const current = FUNNEL_STATUSES.find((s) => s.value === item.funnel_status);
       return (
-        <Select value={item.funnel_status} onValueChange={(v) => onUpdate(item.id, "funnel_status", v)}>
-          <SelectTrigger className="w-24 h-6 text-[11px] px-2">
-            <SelectValue>
-              <div className="flex items-center gap-1">
-                <div className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: current?.color }} />
-                {current?.label ?? item.funnel_status}
-              </div>
-            </SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            {FUNNEL_STATUSES.map((s) => (
-              <SelectItem key={s.value} value={s.value}>
-                <div className="flex items-center gap-1">
-                  <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: s.color }} />
-                  {s.label}
-                </div>
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <Badge
+          variant="outline"
+          className="text-[10px] px-1.5 py-0 h-5 font-medium whitespace-nowrap"
+          style={{ borderColor: current?.color, color: current?.color }}
+        >
+          <div className="w-1.5 h-1.5 rounded-full shrink-0 mr-1" style={{ backgroundColor: current?.color }} />
+          {current?.label ?? item.funnel_status}
+        </Badge>
       );
     },
   },

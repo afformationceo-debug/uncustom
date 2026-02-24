@@ -196,6 +196,7 @@ function ManagePageContent() {
   const debounceTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   function handleUpdate(id: string, field: string, value: unknown) {
+    // Optimistic update for the changed field only
     setItems((prev) =>
       prev.map((item) =>
         item.id === id ? { ...item, [field]: value } : item
@@ -216,6 +217,17 @@ function ManagePageContent() {
           toast.error("저장 실패");
           fetchData();
         } else {
+          // Apply full server response (includes auto-calculated funnel_status)
+          const json = await res.json();
+          if (json.data) {
+            setItems((prev) =>
+              prev.map((item) =>
+                item.id === id
+                  ? { ...item, ...json.data, influencer: item.influencer, campaign: item.campaign }
+                  : item
+              )
+            );
+          }
           setSummaryKey((k) => k + 1);
         }
       } catch {
