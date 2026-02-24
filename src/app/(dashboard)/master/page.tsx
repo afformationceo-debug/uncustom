@@ -1727,10 +1727,11 @@ export default function MasterPage() {
   function startYtEmailPolling(jobId: string, channelCount: number) {
     if (ytEmailPollRef.current) clearInterval(ytEmailPollRef.current);
     setYtEmailLoading(true);
-    ytEmailPollRef.current = setInterval(async () => {
+
+    async function checkStatus() {
       try {
         const res = await fetch(`/api/extract/status?job_id=${jobId}`);
-        if (!res.ok) return;
+        if (!res.ok) return false;
         const data = await res.json();
         if (data.status === "completed") {
           if (ytEmailPollRef.current) { clearInterval(ytEmailPollRef.current); ytEmailPollRef.current = null; }
@@ -1743,13 +1744,24 @@ export default function MasterPage() {
             toast(`이메일 추출 완료: ${processed}채널 검색했으나 이메일을 찾지 못했습니다`, { duration: 8000 });
           }
           fetchInfluencers();
+          return true;
         } else if (data.status === "failed") {
           if (ytEmailPollRef.current) { clearInterval(ytEmailPollRef.current); ytEmailPollRef.current = null; }
           setYtEmailLoading(false);
           toast.error("이메일 추출 실패");
+          return true;
         }
-      } catch { /* silent */ }
-    }, 5000);
+        return false;
+      } catch { return false; }
+    }
+
+    // Check immediately after 3 seconds (endspec actor usually finishes in ~2s)
+    setTimeout(async () => {
+      const done = await checkStatus();
+      if (!done) {
+        ytEmailPollRef.current = setInterval(() => checkStatus(), 5000);
+      }
+    }, 3000);
   }
 
   async function handleYtEmailExtraction() {
@@ -1766,6 +1778,11 @@ export default function MasterPage() {
       });
       const data = await res.json();
       if (!res.ok) {
+        if (res.status === 409 && data.existing_job_id) {
+          toast("이미 실행 중인 추출이 있습니다. 결과를 기다리는 중...", { duration: 5000 });
+          startYtEmailPolling(data.existing_job_id, ytIds.length);
+          return;
+        }
         toast.error(data.error ?? "YouTube 이메일 추출 실패");
         setYtEmailLoading(false);
         return;
@@ -1787,6 +1804,11 @@ export default function MasterPage() {
       });
       const data = await res.json();
       if (!res.ok) {
+        if (res.status === 409 && data.existing_job_id) {
+          toast("이미 실행 중인 추출이 있습니다. 결과를 기다리는 중...", { duration: 5000 });
+          startYtEmailPolling(data.existing_job_id, 1);
+          return;
+        }
         toast.error(data.error ?? "이메일 추출 실패");
         return;
       }
