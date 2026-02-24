@@ -70,6 +70,14 @@ import type { Tables } from "@/types/database";
 import { useRealtime } from "@/hooks/use-realtime";
 
 type Keyword = Tables<"keywords">;
+type ExtractionJob = Tables<"extraction_jobs">;
+
+interface KeywordExtractionStats {
+  runCount: number;
+  totalExtracted: number;
+  lastRunAt: string | null;
+  lastStatus: string | null;
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -186,6 +194,10 @@ export default function MasterKeywordsPage() {
   const [bulkPlatformOpen, setBulkPlatformOpen] = useState(false);
   const [bulkCountryOpen, setBulkCountryOpen] = useState(false);
 
+  // Extraction stats
+  const [extractionStats, setExtractionStats] = useState<Record<string, KeywordExtractionStats>>({});
+  const [platformExtractionStats, setPlatformExtractionStats] = useState<Record<string, { runs: number; extracted: number }>>({});
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const editInputRef = useRef<HTMLInputElement>(null);
 
@@ -193,8 +205,48 @@ export default function MasterKeywordsPage() {
   // Data fetching
   // ---------------------------------------------------------------------------
 
+  async function fetchExtractionStats() {
+    const { data } = await supabase
+      .from("extraction_jobs")
+      .select("source_id, platform, total_extracted, new_extracted, status, completed_at, created_at")
+      .eq("type", "keyword")
+      .order("created_at", { ascending: false });
+
+    if (!data) return;
+    const jobs = data as Pick<ExtractionJob, "source_id" | "platform" | "total_extracted" | "new_extracted" | "status" | "completed_at" | "created_at">[];
+
+    // Per-keyword stats
+    const kwStats: Record<string, KeywordExtractionStats> = {};
+    // Per-platform stats
+    const platStats: Record<string, { runs: number; extracted: number }> = {};
+
+    for (const job of jobs) {
+      const kwId = job.source_id;
+      if (kwId) {
+        if (!kwStats[kwId]) {
+          kwStats[kwId] = { runCount: 0, totalExtracted: 0, lastRunAt: null, lastStatus: null };
+        }
+        kwStats[kwId].runCount++;
+        kwStats[kwId].totalExtracted += job.total_extracted;
+        if (!kwStats[kwId].lastRunAt) {
+          kwStats[kwId].lastRunAt = job.completed_at ?? job.created_at;
+          kwStats[kwId].lastStatus = job.status;
+        }
+      }
+
+      const p = job.platform;
+      if (!platStats[p]) platStats[p] = { runs: 0, extracted: 0 };
+      platStats[p].runs++;
+      platStats[p].extracted += job.total_extracted;
+    }
+
+    setExtractionStats(kwStats);
+    setPlatformExtractionStats(platStats);
+  }
+
   useEffect(() => {
     fetchKeywords();
+    fetchExtractionStats();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -277,13 +329,23 @@ export default function MasterKeywordsPage() {
       .sort((a, b) => b[1] - a[1])
       .slice(0, 5);
 
+    // Total extraction stats
+    let totalRuns = 0;
+    let totalExtracted = 0;
+    for (const s of Object.values(extractionStats)) {
+      totalRuns += s.runCount;
+      totalExtracted += s.totalExtracted;
+    }
+
     return {
       total: keywords.length,
       platformCounts,
       topCountries,
       thisWeekCount,
+      totalRuns,
+      totalExtracted,
     };
-  }, [keywords]);
+  }, [keywords, extractionStats]);
 
   // Selection helpers
   const allFilteredSelected =
@@ -719,19 +781,19 @@ export default function MasterKeywordsPage() {
       {/* ------------------------------------------------------------------ */}
       {/* Statistics Dashboard                                                */}
       {/* ------------------------------------------------------------------ */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        {/* Total */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+        {/* Total Keywords */}
         <Card>
-          <CardContent className="pt-5 pb-4 px-5">
+          <CardContent className="pt-4 pb-3 px-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
                   전체 키워드
                 </p>
-                <p className="text-2xl font-bold mt-1">{stats.total}</p>
+                <p className="text-xl font-bold mt-0.5">{stats.total}</p>
               </div>
-              <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center">
-                <Hash className="h-5 w-5 text-primary" />
+              <div className="h-8 w-8 rounded-lg bg-primary/10 flex items-center justify-center">
+                <Hash className="h-4 w-4 text-primary" />
               </div>
             </div>
           </CardContent>
@@ -739,45 +801,76 @@ export default function MasterKeywordsPage() {
 
         {/* This week */}
         <Card>
-          <CardContent className="pt-5 pb-4 px-5">
+          <CardContent className="pt-4 pb-3 px-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
                   이번 주 추가
                 </p>
-                <p className="text-2xl font-bold mt-1">{stats.thisWeekCount}</p>
+                <p className="text-xl font-bold mt-0.5">{stats.thisWeekCount}</p>
               </div>
-              <div className="h-10 w-10 rounded-lg bg-emerald-500/10 flex items-center justify-center">
-                <TrendingUp className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
+              <div className="h-8 w-8 rounded-lg bg-emerald-500/10 flex items-center justify-center">
+                <TrendingUp className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
               </div>
             </div>
           </CardContent>
         </Card>
 
-        {/* Platform breakdown */}
+        {/* Total Extraction Runs */}
         <Card>
-          <CardContent className="pt-5 pb-4 px-5">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-              플랫폼별
+          <CardContent className="pt-4 pb-3 px-4">
+            <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+              총 추출 횟수
             </p>
-            <div className="mt-2.5 space-y-1.5">
-              {PLATFORMS.map((p) => {
-                const count = stats.platformCounts[p.value] ?? 0;
-                if (count === 0) return null;
+            <p className="text-xl font-bold mt-0.5">{stats.totalRuns.toLocaleString()}</p>
+          </CardContent>
+        </Card>
+
+        {/* Total Extracted */}
+        <Card>
+          <CardContent className="pt-4 pb-3 px-4">
+            <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+              총 추출 결과
+            </p>
+            <p className="text-xl font-bold mt-0.5">{stats.totalExtracted.toLocaleString()}</p>
+          </CardContent>
+        </Card>
+
+        {/* Platform extraction breakdown */}
+        <Card>
+          <CardContent className="pt-4 pb-3 px-4">
+            <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mb-1.5">
+              플랫폼별 키워드
+            </p>
+            <div className="space-y-1">
+              {PLATFORMS.filter((p) => p.value !== "all").map((p) => {
+                const kwCount = stats.platformCounts[p.value] ?? 0;
+                const extStats = platformExtractionStats[p.value];
                 return (
-                  <div key={p.value} className="flex items-center justify-between text-sm">
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={`w-2 h-2 rounded-full ${PLATFORM_DOTS[p.value] ?? "bg-muted-foreground"}`}
-                      />
+                  <div key={p.value} className="flex items-center justify-between text-[11px]">
+                    <div className="flex items-center gap-1.5">
+                      <span className={`w-1.5 h-1.5 rounded-full ${PLATFORM_DOTS[p.value]}`} />
                       <span className="text-muted-foreground">{p.label}</span>
                     </div>
-                    <span className="font-medium">{count}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium">{kwCount}</span>
+                      {extStats && (
+                        <span className="text-[10px] text-muted-foreground">
+                          ({extStats.extracted.toLocaleString()}명)
+                        </span>
+                      )}
+                    </div>
                   </div>
                 );
               })}
-              {Object.values(stats.platformCounts).every((c) => c === 0) && (
-                <p className="text-xs text-muted-foreground">데이터 없음</p>
+              {(stats.platformCounts["all"] ?? 0) > 0 && (
+                <div className="flex items-center justify-between text-[11px]">
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground" />
+                    <span className="text-muted-foreground">전체</span>
+                  </div>
+                  <span className="font-medium">{stats.platformCounts["all"]}</span>
+                </div>
               )}
             </div>
           </CardContent>
@@ -785,28 +878,24 @@ export default function MasterKeywordsPage() {
 
         {/* Country breakdown */}
         <Card>
-          <CardContent className="pt-5 pb-4 px-5">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+          <CardContent className="pt-4 pb-3 px-4">
+            <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mb-1.5">
               국가별 (Top 5)
             </p>
-            <div className="mt-2.5 space-y-1.5">
+            <div className="space-y-1">
               {stats.topCountries.map(([code, count]) => {
                 const info = getCountryInfo(code);
                 return (
-                  <div
-                    key={code}
-                    className="flex items-center justify-between text-sm"
-                  >
+                  <div key={code} className="flex items-center justify-between text-[11px]">
                     <span className="text-muted-foreground">
-                      {info.flag ? `${info.flag} ` : ""}
-                      {info.label}
+                      {info.flag ? `${info.flag} ` : ""}{info.label}
                     </span>
                     <span className="font-medium">{count}</span>
                   </div>
                 );
               })}
               {stats.topCountries.length === 0 && (
-                <p className="text-xs text-muted-foreground">데이터 없음</p>
+                <p className="text-[10px] text-muted-foreground">데이터 없음</p>
               )}
             </div>
           </CardContent>
@@ -1093,6 +1182,7 @@ export default function MasterKeywordsPage() {
                 <TableHead>키워드</TableHead>
                 <TableHead className="w-32">플랫폼</TableHead>
                 <TableHead className="w-32">국가</TableHead>
+                <TableHead className="w-40">추출 현황</TableHead>
                 <TableHead className="w-32">등록일</TableHead>
                 <TableHead className="w-16" />
               </TableRow>
@@ -1101,7 +1191,7 @@ export default function MasterKeywordsPage() {
               {loading ? (
                 <TableRow>
                   <TableCell
-                    colSpan={6}
+                    colSpan={7}
                     className="text-center py-16 text-muted-foreground"
                   >
                     <div className="flex flex-col items-center gap-2">
@@ -1113,7 +1203,7 @@ export default function MasterKeywordsPage() {
               ) : filteredKeywords.length === 0 ? (
                 <TableRow>
                   <TableCell
-                    colSpan={6}
+                    colSpan={7}
                     className="text-center py-16 text-muted-foreground"
                   >
                     <div className="flex flex-col items-center gap-2">
@@ -1245,6 +1335,41 @@ export default function MasterKeywordsPage() {
                               : countryInfo.label}
                           </Badge>
                         )}
+                      </TableCell>
+
+                      {/* Extraction Stats */}
+                      <TableCell>
+                        {(() => {
+                          const es = extractionStats[kw.id];
+                          if (!es || es.runCount === 0) {
+                            return <span className="text-[11px] text-muted-foreground">미추출</span>;
+                          }
+                          return (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <div className="flex items-center gap-1.5">
+                                  <Badge variant="outline" className="text-[10px] px-1.5 py-0 font-normal gap-1">
+                                    <span className="font-medium">{es.runCount}회</span>
+                                    <span className="text-muted-foreground">/</span>
+                                    <span className="font-medium">{es.totalExtracted.toLocaleString()}명</span>
+                                  </Badge>
+                                  {es.lastStatus === "RUNNING" && (
+                                    <div className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                                  )}
+                                </div>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <div className="text-xs space-y-0.5">
+                                  <div>추출 {es.runCount}회 실행</div>
+                                  <div>총 {es.totalExtracted.toLocaleString()}명 추출</div>
+                                  {es.lastRunAt && (
+                                    <div>마지막: {new Date(es.lastRunAt).toLocaleString("ko-KR")}</div>
+                                  )}
+                                </div>
+                              </TooltipContent>
+                            </Tooltip>
+                          );
+                        })()}
                       </TableCell>
 
                       {/* Date */}
