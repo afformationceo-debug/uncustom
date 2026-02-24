@@ -1319,6 +1319,7 @@ async function autoTriggerYoutubeEmailExtraction(
         .select("id, username, platform_id")
         .eq("platform", "youtube")
         .is("email", null)
+        .neq("email_source", "not_found")
         .in("id", chunk);
       if (data) allInfluencers.push(data as Array<{ id: string; username: string | null; platform_id: string | null }>);
     }
@@ -1473,42 +1474,47 @@ async function handleYoutubeEmailStatus(
             !e.includes("dpo.support@") && !e.includes("noreply@")
         );
 
+        // Also store social links if available
+        const socials = (result.socials ?? []) as string[];
+        const firstSocial = socials.length > 0 ? socials[0] : null;
+
         if (validEmails.length > 0) {
           // Check if influencer still doesn't have an email
           const { data: inf } = await supabase
             .from("influencers")
-            .select("email")
+            .select("email, external_url")
             .eq("id", run.influencer_id)
             .single();
 
           if (inf && !inf.email) {
+            const updateData: Record<string, string> = {
+              email: validEmails[0],
+              email_source: "youtube_about",
+            };
+            if (!inf.external_url && firstSocial) updateData.external_url = firstSocial;
             await supabase
               .from("influencers")
-              .update({
-                email: validEmails[0],
-                email_source: "youtube_about",
-              })
+              .update(updateData)
               .eq("id", run.influencer_id);
             emailsFound++;
             console.log(`[extract/status] YouTube email found for ${run.channel_handle}: ${validEmails[0]}`);
           }
-        }
-
-        // Also store social links if available
-        const socials = (result.socials ?? []) as string[];
-        if (socials.length > 0) {
-          // Store first social link as external_url if influencer doesn't have one
-          const { data: infExt } = await supabase
+        } else {
+          // No email found — mark as "not_found" so we don't re-extract
+          const { data: inf } = await supabase
             .from("influencers")
-            .select("external_url")
+            .select("email, email_source, external_url")
             .eq("id", run.influencer_id)
             .single();
 
-          if (infExt && !infExt.external_url && socials[0]) {
+          if (inf && !inf.email && inf.email_source !== "not_found") {
+            const updateData: Record<string, string> = { email_source: "not_found" };
+            if (!inf.external_url && firstSocial) updateData.external_url = firstSocial;
             await supabase
               .from("influencers")
-              .update({ external_url: socials[0] })
+              .update(updateData)
               .eq("id", run.influencer_id);
+            console.log(`[extract/status] YouTube email not found for ${run.channel_handle}`);
           }
         }
       }

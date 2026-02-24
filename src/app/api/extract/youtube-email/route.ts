@@ -61,6 +61,7 @@ export async function POST(request: Request) {
         .select("id, username, platform_id")
         .eq("platform", "youtube")
         .is("email", null)
+        .neq("email_source", "not_found")
         .limit(50);
 
       if (campaign_id) {

@@ -662,6 +662,15 @@ function getColumnsForPlatform(platform: PlatformFilter): ColumnDef[] {
             <TooltipContent>{inf.email}</TooltipContent>
           </Tooltip>
         </div>
+      ) : inf.platform === "youtube" && inf.email_source === "not_found" ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded cursor-default">
+              찾기 실패
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>이메일을 찾을 수 없었습니다 (재추출하려면 선택 후 YT 이메일 추출)</TooltipContent>
+        </Tooltip>
       ) : inf.platform === "youtube" && helpers.onYtEmail ? (
         <Tooltip>
           <TooltipTrigger asChild>
