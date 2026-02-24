@@ -117,6 +117,13 @@ export const CLIENT_PAYMENT_STATUSES: { value: ClientPaymentStatus; label: strin
   { value: "paid", label: "수금완료", color: "#10B981" },
 ];
 
+export type OutreachType = "email" | "dm";
+
+export const OUTREACH_TYPES: { value: OutreachType; label: string }[] = [
+  { value: "email", label: "이메일" },
+  { value: "dm", label: "DM" },
+];
+
 export const REPLY_CHANNELS: { value: ReplyChannel; label: string }[] = [
   { value: "email", label: "이메일" },
   { value: "dm_instagram", label: "인스타 DM" },

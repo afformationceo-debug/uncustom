@@ -23,7 +23,7 @@ interface FunnelTableProps {
   activeGroups: ColumnGroup[];
   onGroupsChange: (groups: ColumnGroup[]) => void;
   onUpdate: (id: string, field: string, value: unknown) => void;
-  onNoteEdit: (item: CampaignInfluencer) => void;
+  onNoteEdit: (item: CampaignInfluencer, field: string, value: string) => void;
   onRowClick: (item: CampaignInfluencer) => void;
 }
 

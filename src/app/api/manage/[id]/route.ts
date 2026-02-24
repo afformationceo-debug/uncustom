@@ -14,6 +14,50 @@ const BOOLEAN_TIMESTAMP_MAP: Record<string, string> = {
   visit_completed: "visit_completed_at",
 };
 
+// Funnel status priority order (higher index = more advanced)
+const FUNNEL_ORDER: FunnelStatus[] = [
+  "extracted",
+  "contacted",
+  "interested",
+  "client_approved",
+  "confirmed",
+  "guideline_sent",
+  "crm_registered",
+  "visit_scheduled",
+  "visited",
+  "upload_pending",
+  "uploaded",
+  "completed",
+  "settled",
+];
+
+/**
+ * Auto-calculate funnel_status based on field values.
+ * Merges current record + incoming updates, then returns the highest applicable status.
+ * Only advances forward (never goes backward), unless manually set.
+ */
+function autoCalculateFunnelStatus(merged: Record<string, unknown>): FunnelStatus {
+  // Check from highest to lowest — return the first (highest) match
+  if (merged.influencer_payment_status === "paid" && merged.client_payment_status === "paid") return "settled";
+  if (merged.upload_url) return "uploaded";
+  if (merged.actual_upload_date) return "uploaded";
+  if (merged.upload_deadline) return "upload_pending";
+  if (merged.visit_completed === true) return "visited";
+  if (merged.visit_scheduled_date) return "visit_scheduled";
+  if (merged.crm_registered === true) return "crm_registered";
+  if (merged.guideline_sent === true) return "guideline_sent";
+  if (merged.final_confirmed === true) return "confirmed";
+  if (merged.client_approved === true) return "client_approved";
+  if (merged.interest_confirmed === true) return "interested";
+  if ((merged.outreach_round as number) > 0 || merged.last_outreach_at) return "contacted";
+  return "extracted";
+}
+
+function getFunnelIndex(status: FunnelStatus): number {
+  const idx = FUNNEL_ORDER.indexOf(status);
+  return idx >= 0 ? idx : 0;
+}
+
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -61,6 +105,30 @@ export async function PATCH(
         new_value: value != null ? String(value) : null,
         action: key === "funnel_status" ? "status_change" : key === "notes" ? "note_added" : "field_update",
       });
+    }
+
+    // Auto-calculate funnel_status when non-status fields change
+    // Skip if the user explicitly set funnel_status in this update
+    const isManualStatusChange = "funnel_status" in body;
+    const isTerminalStatus = record.funnel_status === "declined" || record.funnel_status === "dropped";
+
+    if (!isManualStatusChange && !isTerminalStatus && Object.keys(updatePayload).length > 0) {
+      // Merge current record with updates
+      const merged = { ...(record as unknown as Record<string, unknown>), ...updatePayload };
+      const calculatedStatus = autoCalculateFunnelStatus(merged);
+      const currentIndex = getFunnelIndex(record.funnel_status as FunnelStatus);
+      const calculatedIndex = getFunnelIndex(calculatedStatus);
+
+      // Only advance forward
+      if (calculatedIndex > currentIndex) {
+        updatePayload.funnel_status = calculatedStatus;
+        logs.push({
+          field_name: "funnel_status",
+          old_value: record.funnel_status,
+          new_value: calculatedStatus,
+          action: "status_change",
+        });
+      }
     }
 
     // Sync funnel_status → legacy status

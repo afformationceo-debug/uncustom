@@ -10,8 +10,8 @@ export async function GET(request: Request) {
 
     const page = Math.max(1, parseInt(searchParams.get("page") ?? "1"));
     const limit = Math.min(200, Math.max(1, parseInt(searchParams.get("limit") ?? "50")));
-    const sortBy = searchParams.get("sort_by") ?? "funnel_status";
-    const sortOrder = searchParams.get("sort_order") === "desc" ? false : true;
+    const sortBy = searchParams.get("sort_by") ?? "created_at";
+    const sortOrder = searchParams.get("sort_order") === "asc" ? true : false;
 
     // Filters
     const funnelStatus = searchParams.get("funnel_status");
@@ -124,8 +124,8 @@ export async function GET(request: Request) {
 
     // Sort by campaign_influencers fields directly
     const ciFields = [
-      "funnel_status", "created_at", "outreach_round", "last_outreach_at",
-      "reply_date", "interest_confirmed_at", "client_approved_at", "final_confirmed_at",
+      "funnel_status", "created_at", "outreach_round", "outreach_type", "last_outreach_at",
+      "reply_date", "reply_channel", "interest_confirmed_at", "client_approved_at", "final_confirmed_at",
       "payment_amount", "invoice_amount", "visit_scheduled_date", "upload_deadline",
       "actual_upload_date", "influencer_payment_status", "client_payment_status",
     ];

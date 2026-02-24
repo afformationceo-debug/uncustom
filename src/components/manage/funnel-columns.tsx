@@ -3,14 +3,18 @@
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
-  FUNNEL_STATUSES, PLATFORMS, REPLY_CHANNELS,
+  Popover, PopoverContent, PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  FUNNEL_STATUSES, PLATFORMS, REPLY_CHANNELS, OUTREACH_TYPES,
   INFLUENCER_PAYMENT_STATUSES, CLIENT_PAYMENT_STATUSES,
 } from "@/types/platform";
 import { InlineCurrencyInput } from "./inline-currency-input";
 import { InlineSettlementEditor } from "./inline-settlement-editor";
-import { Mail, Users, ExternalLink, StickyNote } from "lucide-react";
+import { Mail, Users, ExternalLink, StickyNote, BarChart3 } from "lucide-react";
 import type { Tables, Json } from "@/types/database";
 
 type CampaignInfluencer = Tables<"campaign_influencers"> & {
@@ -35,7 +39,11 @@ export interface ColumnDef {
   group: ColumnGroup;
   width?: string;
   sticky?: boolean;
-  render: (item: CampaignInfluencer, onUpdate: (id: string, field: string, value: unknown) => void, onNoteEdit: (item: CampaignInfluencer) => void) => React.ReactNode;
+  render: (
+    item: CampaignInfluencer,
+    onUpdate: (id: string, field: string, value: unknown) => void,
+    onNoteEdit: (item: CampaignInfluencer, field: string, value: string) => void,
+  ) => React.ReactNode;
 }
 
 function formatCount(n: number | null) {
@@ -43,6 +51,74 @@ function formatCount(n: number | null) {
   if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
   if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
   return n.toString();
+}
+
+/** Inline text input that saves on blur/Enter */
+function InlineText({
+  value,
+  placeholder,
+  onSave,
+  className = "",
+}: {
+  value: string | null;
+  placeholder?: string;
+  onSave: (v: string | null) => void;
+  className?: string;
+}) {
+  return (
+    <Input
+      defaultValue={value ?? ""}
+      placeholder={placeholder ?? "-"}
+      onBlur={(e) => {
+        const v = e.target.value.trim();
+        onSave(v || null);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.currentTarget.blur();
+        }
+      }}
+      className={`h-6 text-[11px] px-1.5 ${className}`}
+    />
+  );
+}
+
+/** Content metrics popover */
+function MetricsPopover({ metrics, uploadUrl }: { metrics: Json | null; uploadUrl: string | null }) {
+  const m = metrics as { views?: number; likes?: number; comments?: number; shares?: number } | null;
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0">
+          <BarChart3 className="w-3 h-3" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-56 p-3" align="start">
+        <h4 className="text-xs font-semibold mb-2">콘텐츠 성과</h4>
+        {m ? (
+          <div className="space-y-1.5 text-xs">
+            {m.views != null && <div className="flex justify-between"><span className="text-muted-foreground">조회수</span><span className="font-medium">{m.views.toLocaleString()}</span></div>}
+            {m.likes != null && <div className="flex justify-between"><span className="text-muted-foreground">좋아요</span><span className="font-medium">{m.likes.toLocaleString()}</span></div>}
+            {m.comments != null && <div className="flex justify-between"><span className="text-muted-foreground">댓글</span><span className="font-medium">{m.comments.toLocaleString()}</span></div>}
+            {m.shares != null && <div className="flex justify-between"><span className="text-muted-foreground">공유</span><span className="font-medium">{m.shares.toLocaleString()}</span></div>}
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground">아직 수집된 성과 데이터가 없습니다.</p>
+        )}
+        {uploadUrl && (
+          <a
+            href={uploadUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-2 text-xs text-primary flex items-center gap-1 hover:underline"
+          >
+            콘텐츠 보기 <ExternalLink className="w-3 h-3" />
+          </a>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
 }
 
 export const ALL_COLUMNS: ColumnDef[] = [
@@ -140,14 +216,14 @@ export const ALL_COLUMNS: ColumnDef[] = [
     render: (item, _onUpdate, onNoteEdit) => (
       item.notes ? (
         <button
-          onClick={() => onNoteEdit(item)}
+          onClick={() => onNoteEdit(item, "notes", item.notes ?? "")}
           className="text-[11px] text-muted-foreground truncate max-w-[80px] block hover:text-primary"
           title={item.notes}
         >
           {item.notes.slice(0, 15)}...
         </button>
       ) : (
-        <button onClick={() => onNoteEdit(item)} className="text-muted-foreground hover:text-foreground">
+        <button onClick={() => onNoteEdit(item, "notes", "")} className="text-muted-foreground hover:text-foreground">
           <StickyNote className="w-3 h-3" />
         </button>
       )
@@ -169,6 +245,21 @@ export const ALL_COLUMNS: ColumnDef[] = [
   },
 
   // === OUTREACH ===
+  {
+    key: "outreach_type",
+    label: "발송유형",
+    group: "outreach",
+    render: (item, onUpdate) => (
+      <Select value={item.outreach_type ?? "email"} onValueChange={(v) => onUpdate(item.id, "outreach_type", v)}>
+        <SelectTrigger className="w-20 h-6 text-[11px] px-2">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {OUTREACH_TYPES.map((t) => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}
+        </SelectContent>
+      </Select>
+    ),
+  },
   {
     key: "outreach_round",
     label: "발송N차",
@@ -207,6 +298,26 @@ export const ALL_COLUMNS: ColumnDef[] = [
     ),
   },
   {
+    key: "reply_channel_url",
+    label: "회신링크",
+    group: "outreach",
+    render: (item, onUpdate) => (
+      <div className="flex items-center gap-0.5">
+        <InlineText
+          value={item.reply_channel_url}
+          placeholder="링크"
+          onSave={(v) => onUpdate(item.id, "reply_channel_url", v)}
+          className="w-28"
+        />
+        {item.reply_channel_url && (
+          <a href={item.reply_channel_url} target="_blank" rel="noopener noreferrer">
+            <ExternalLink className="w-3 h-3 text-muted-foreground" />
+          </a>
+        )}
+      </div>
+    ),
+  },
+  {
     key: "reply_date",
     label: "회신일",
     group: "outreach",
@@ -223,13 +334,13 @@ export const ALL_COLUMNS: ColumnDef[] = [
     key: "reply_summary",
     label: "회신요약",
     group: "outreach",
-    render: (item, _onUpdate, onNoteEdit) => (
-      <button
-        onClick={() => onNoteEdit({ ...item, notes: item.reply_summary ?? "" } as CampaignInfluencer)}
-        className="text-[11px] text-muted-foreground truncate max-w-[80px] block hover:text-primary"
-      >
-        {item.reply_summary?.slice(0, 15) ?? "-"}
-      </button>
+    render: (item, onUpdate) => (
+      <InlineText
+        value={item.reply_summary}
+        placeholder="요약"
+        onSave={(v) => onUpdate(item.id, "reply_summary", v)}
+        className="w-28"
+      />
     ),
   },
 
@@ -262,13 +373,13 @@ export const ALL_COLUMNS: ColumnDef[] = [
     key: "client_note",
     label: "거래처메모",
     group: "confirm",
-    render: (item, _onUpdate, onNoteEdit) => (
-      <button
-        onClick={() => onNoteEdit({ ...item, notes: item.client_note ?? "" } as CampaignInfluencer)}
-        className="text-[11px] text-muted-foreground truncate max-w-[80px] block hover:text-primary"
-      >
-        {item.client_note?.slice(0, 15) ?? "-"}
-      </button>
+    render: (item, onUpdate) => (
+      <InlineText
+        value={item.client_note}
+        placeholder="메모 입력"
+        onSave={(v) => onUpdate(item.id, "client_note", v)}
+        className="w-28"
+      />
     ),
   },
   {
@@ -291,11 +402,11 @@ export const ALL_COLUMNS: ColumnDef[] = [
     group: "execution",
     render: (item, onUpdate) => (
       <div className="flex items-center gap-0.5">
-        <Input
-          value={item.guideline_url ?? ""}
-          onChange={(e) => onUpdate(item.id, "guideline_url", e.target.value || null)}
-          className="h-6 w-28 text-[11px] px-1.5"
+        <InlineText
+          value={item.guideline_url}
           placeholder="URL"
+          onSave={(v) => onUpdate(item.id, "guideline_url", v)}
+          className="w-28"
         />
         {item.guideline_url && (
           <a href={item.guideline_url} target="_blank" rel="noopener noreferrer">
@@ -326,6 +437,19 @@ export const ALL_COLUMNS: ColumnDef[] = [
         checked={item.crm_registered}
         onCheckedChange={(v) => onUpdate(item.id, "crm_registered", v)}
         className="scale-75"
+      />
+    ),
+  },
+  {
+    key: "crm_note",
+    label: "CRM메모",
+    group: "execution",
+    render: (item, onUpdate) => (
+      <InlineText
+        value={item.crm_note}
+        placeholder="CRM 메모"
+        onSave={(v) => onUpdate(item.id, "crm_note", v)}
+        className="w-28"
       />
     ),
   },
@@ -388,34 +512,22 @@ export const ALL_COLUMNS: ColumnDef[] = [
     group: "content",
     render: (item, onUpdate) => (
       <div className="flex items-center gap-0.5">
-        <Input
-          value={item.upload_url ?? ""}
-          onChange={(e) => onUpdate(item.id, "upload_url", e.target.value || null)}
-          className="h-6 w-28 text-[11px] px-1.5"
+        <InlineText
+          value={item.upload_url}
           placeholder="URL"
+          onSave={(v) => onUpdate(item.id, "upload_url", v)}
+          className="w-28"
         />
         {item.upload_url && (
-          <a href={item.upload_url} target="_blank" rel="noopener noreferrer">
-            <ExternalLink className="w-3 h-3 text-muted-foreground" />
-          </a>
+          <>
+            <a href={item.upload_url} target="_blank" rel="noopener noreferrer">
+              <ExternalLink className="w-3 h-3 text-muted-foreground" />
+            </a>
+            <MetricsPopover metrics={item.content_metrics_cache} uploadUrl={item.upload_url} />
+          </>
         )}
       </div>
     ),
-  },
-  {
-    key: "content_metrics",
-    label: "메트릭",
-    group: "content",
-    render: (item) => {
-      const m = item.content_metrics_cache as { views?: number; likes?: number; comments?: number } | null;
-      if (!m) return <span className="text-[10px] text-muted-foreground">-</span>;
-      return (
-        <div className="text-[10px] text-muted-foreground leading-tight">
-          {m.views != null && <span>조회 {m.views.toLocaleString()} </span>}
-          {m.likes != null && <span>좋아요 {m.likes.toLocaleString()}</span>}
-        </div>
-      );
-    },
   },
 
   // === SETTLEMENT ===

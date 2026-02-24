@@ -514,6 +514,8 @@ export type Database = {
           client_invoiced_at: string | null;
           client_paid_at: string | null;
           client_paid_amount: number | null;
+          outreach_type: string;
+          reply_channel_url: string | null;
           second_funnel_campaign_id: string | null;
           second_funnel_status: string | null;
         };
@@ -564,6 +566,8 @@ export type Database = {
           client_invoiced_at?: string | null;
           client_paid_at?: string | null;
           client_paid_amount?: number | null;
+          outreach_type?: string;
+          reply_channel_url?: string | null;
           second_funnel_campaign_id?: string | null;
           second_funnel_status?: string | null;
         };
@@ -614,6 +618,8 @@ export type Database = {
           client_invoiced_at?: string | null;
           client_paid_at?: string | null;
           client_paid_amount?: number | null;
+          outreach_type?: string;
+          reply_channel_url?: string | null;
           second_funnel_campaign_id?: string | null;
           second_funnel_status?: string | null;
         };

@@ -225,9 +225,9 @@ function ManagePageContent() {
     }, 300);
   }
 
-  // Note editor
-  function handleNoteEdit(item: CampaignInfluencer) {
-    setEditingNote({ id: item.id, field: "notes", value: item.notes ?? "" });
+  // Note editor — supports multiple text fields (notes, client_note, reply_summary, crm_note)
+  function handleNoteEdit(_item: CampaignInfluencer, field: string, value: string) {
+    setEditingNote({ id: _item.id, field, value });
   }
 
   async function saveNote() {
@@ -343,7 +343,9 @@ function ManagePageContent() {
       <Dialog open={!!editingNote} onOpenChange={() => setEditingNote(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>메모 편집</DialogTitle>
+            <DialogTitle>
+              {editingNote?.field === "notes" ? "메모" : editingNote?.field === "client_note" ? "거래처 메모" : editingNote?.field === "reply_summary" ? "회신 요약" : editingNote?.field === "crm_note" ? "CRM 메모" : "편집"}
+            </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <Textarea
