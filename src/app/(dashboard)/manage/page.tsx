@@ -81,8 +81,8 @@ function ManagePageContent() {
   // Column groups
   const [activeGroups, setActiveGroups] = useState<ColumnGroup[]>(loadColumnGroups);
 
-  // Grouping (multi-level)
-  const [groupBy, setGroupBy] = useState<GroupByKey[]>([]);
+  // Grouping (multi-level, "campaign" is always fixed as first group)
+  const [groupBy, setGroupBy] = useState<GroupByKey[]>(["campaign"]);
 
   // Selection
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -244,14 +244,12 @@ function ManagePageContent() {
           toast.error("저장 실패");
           fetchData();
         } else {
-          // Apply full server response (includes auto-calculated funnel_status)
+          // Apply full server response (includes auto-calculated funnel_status + joined relations)
           const json = await res.json();
           if (json.data) {
             setItems((prev) =>
               prev.map((item) =>
-                item.id === id
-                  ? { ...item, ...json.data, influencer: item.influencer, campaign: item.campaign }
-                  : item
+                item.id === id ? { ...item, ...json.data } : item
               )
             );
           }

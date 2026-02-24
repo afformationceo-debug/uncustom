@@ -58,13 +58,18 @@ export async function POST(request: Request) {
       })
       .eq("id", thread.id);
 
-    // Update campaign_influencer status to "replied"
+    // Update campaign_influencer status to "replied" (both legacy + funnel)
     await supabase
       .from("campaign_influencers")
-      .update({ status: "replied" })
+      .update({
+        status: "replied",
+        funnel_status: "interested",
+        reply_date: new Date().toISOString(),
+        reply_channel: "email",
+      })
       .eq("campaign_id", thread.campaign_id)
       .eq("influencer_id", influencer.id)
-      .in("status", ["extracted", "contacted"]);
+      .in("funnel_status", ["extracted", "contacted"]);
 
     // Update email_log replied_at
     await supabase

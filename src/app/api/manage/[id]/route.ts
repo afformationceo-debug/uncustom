@@ -147,12 +147,14 @@ export async function PATCH(
       return NextResponse.json({ data: current });
     }
 
-    // Update
+    // Update — return with joined relations so UI stays complete
     const { data: updated, error: updateError } = await supabase
       .from("campaign_influencers")
       .update(updatePayload)
       .eq("id", id)
-      .select("*")
+      .select(`*,
+        influencer:influencers!inner(id, username, display_name, email, platform, follower_count, profile_image_url, profile_url),
+        campaign:campaigns!campaign_id(id, name, campaign_type)`)
       .single();
 
     if (updateError) {

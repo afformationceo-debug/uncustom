@@ -157,13 +157,18 @@ export async function POST(request: Request) {
           sent_at: new Date().toISOString(),
         });
 
-        // Update campaign_influencer status
+        // Update campaign_influencer status (both legacy + funnel)
+        // Only advance if still at "extracted" — don't regress more advanced statuses
         await supabase
           .from("campaign_influencers")
-          .update({ status: "contacted" })
+          .update({
+            status: "contacted",
+            funnel_status: "contacted",
+            last_outreach_at: new Date().toISOString(),
+          })
           .eq("campaign_id", campaign_id)
           .eq("influencer_id", inf.id)
-          .eq("status", "extracted");
+          .in("funnel_status", ["extracted"]);
 
         // Create or update email thread
         await supabase

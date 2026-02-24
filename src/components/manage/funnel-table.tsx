@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import {
   Popover, PopoverContent, PopoverTrigger,
 } from "@/components/ui/popover";
-import { Loader2, Layers, X, Plus, ChevronRight, ChevronDown } from "lucide-react";
+import { Loader2, Layers, X, Plus, ChevronRight, ChevronDown, Lock } from "lucide-react";
 import { getColumnsForGroups, COLUMN_GROUPS } from "./funnel-columns";
 import { FUNNEL_STATUSES, PLATFORMS } from "@/types/platform";
 import type { ColumnGroup } from "./funnel-columns";
@@ -19,11 +19,11 @@ type CampaignInfluencer = Tables<"campaign_influencers"> & {
   campaign?: { id: string; name: string; campaign_type?: string };
 };
 
-// Multi-group support: empty array = no grouping
+// Multi-group support: "campaign" is always first (fixed)
 export type GroupByKey = "campaign" | "platform" | "funnel_status" | "campaign_type";
 
-const GROUP_OPTIONS: { value: GroupByKey; label: string }[] = [
-  { value: "campaign", label: "캠페인별" },
+// "campaign" is fixed — cannot be removed; rest are optional
+const EXTRA_GROUP_OPTIONS: { value: GroupByKey; label: string }[] = [
   { value: "platform", label: "플랫폼별" },
   { value: "funnel_status", label: "퍼널상태별" },
   { value: "campaign_type", label: "캠페인유형별" },
@@ -88,13 +88,13 @@ function buildNestedGroups(items: CampaignInfluencer[], keys: GroupByKey[]): Nes
 }
 
 // Sticky column left offsets (px): checkbox(32) + campaign(120) + influencer(170) + platform(56)
-const STICKY_OFFSETS = {
+const STICKY_OFFSETS: Record<string, number> = {
   checkbox: 0,
   campaign_name: 32,
   influencer: 152,
   platform: 322,
 };
-const LAST_STICKY_LEFT = STICKY_OFFSETS.platform;
+const LAST_STICKY_LEFT = 322; // platform offset
 
 interface FunnelTableProps {
   items: CampaignInfluencer[];
@@ -119,11 +119,16 @@ export function FunnelTable({
   const allSelected = items.length > 0 && selectedIds.length === items.length;
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
 
-  // Multi-level grouping
+  // Ensure "campaign" is always first in groupBy
+  const effectiveGroupBy = useMemo(() => {
+    if (groupBy[0] === "campaign") return groupBy;
+    return ["campaign" as GroupByKey, ...groupBy.filter((g) => g !== "campaign")];
+  }, [groupBy]);
+
+  // Multi-level grouping (always grouped by campaign)
   const nested = useMemo(() => {
-    if (groupBy.length === 0) return null;
-    return buildNestedGroups(items, groupBy);
-  }, [items, groupBy]);
+    return buildNestedGroups(items, effectiveGroupBy);
+  }, [items, effectiveGroupBy]);
 
   function toggleAll() {
     onSelectionChange(allSelected ? [] : items.map((i) => i.id));
@@ -147,13 +152,15 @@ export function FunnelTable({
   }
 
   function addGroupBy(key: GroupByKey) {
-    if (!groupBy.includes(key)) {
-      onGroupByChange([...groupBy, key]);
+    if (!effectiveGroupBy.includes(key)) {
+      onGroupByChange([...effectiveGroupBy, key]);
     }
   }
 
   function removeGroupBy(key: GroupByKey) {
-    onGroupByChange(groupBy.filter((g) => g !== key));
+    // "campaign" cannot be removed
+    if (key === "campaign") return;
+    onGroupByChange(effectiveGroupBy.filter((g) => g !== key));
   }
 
   function toggleCollapse(groupPath: string) {
@@ -165,23 +172,37 @@ export function FunnelTable({
     });
   }
 
-  // Sticky cell helper
+  // Sticky cell style builder — uses inline styles for precise positioning
   function stickyStyle(colKey: string, isHeader: boolean): React.CSSProperties | undefined {
-    const offset = STICKY_OFFSETS[colKey as keyof typeof STICKY_OFFSETS];
+    const offset = STICKY_OFFSETS[colKey];
     if (offset == null) return undefined;
     const isLast = offset === LAST_STICKY_LEFT;
     return {
-      position: "sticky" as const,
+      position: "sticky",
       left: offset,
       zIndex: isHeader ? (colKey === "checkbox" ? 30 : 20) : (colKey === "checkbox" ? 20 : 10),
       ...(isLast ? { boxShadow: "2px 0 4px -2px rgba(0,0,0,0.08)" } : {}),
     };
   }
 
-  function stickyClass(colKey: string): string {
-    const offset = STICKY_OFFSETS[colKey as keyof typeof STICKY_OFFSETS];
-    if (offset == null) return "";
-    return "sticky bg-card";
+  // Fixed-width style for sticky columns
+  function fixedWidthStyle(col: { fixedWidth?: number }): React.CSSProperties | undefined {
+    if (!col.fixedWidth) return undefined;
+    return { width: col.fixedWidth, minWidth: col.fixedWidth, maxWidth: col.fixedWidth };
+  }
+
+  // Merge multiple style objects
+  function mergeStyles(...styles: (React.CSSProperties | undefined)[]): React.CSSProperties | undefined {
+    const merged: React.CSSProperties = {};
+    let hasAny = false;
+    for (const s of styles) {
+      if (s) { Object.assign(merged, s); hasAny = true; }
+    }
+    return hasAny ? merged : undefined;
+  }
+
+  function isStickyCol(colKey: string): boolean {
+    return colKey in STICKY_OFFSETS;
   }
 
   function renderRow(item: CampaignInfluencer) {
@@ -192,8 +213,8 @@ export function FunnelTable({
         className={`h-8 cursor-pointer hover:bg-accent/50 ${isSelected ? "bg-accent/30" : ""}`}
       >
         <TableCell
-          className={`px-1.5 py-0.5 w-[32px] min-w-[32px] ${stickyClass("checkbox")} ${isSelected ? "!bg-accent/30" : ""}`}
-          style={stickyStyle("checkbox", false)}
+          className={`px-1.5 py-0.5 bg-card ${isSelected ? "!bg-accent/30" : ""}`}
+          style={mergeStyles(stickyStyle("checkbox", false), { width: 32, minWidth: 32, maxWidth: 32 })}
           onClick={(e) => e.stopPropagation()}
         >
           <Checkbox
@@ -203,12 +224,15 @@ export function FunnelTable({
           />
         </TableCell>
         {columns.map((col) => {
-          const isStickyCol = col.key in STICKY_OFFSETS;
+          const sticky = isStickyCol(col.key);
           return (
             <TableCell
               key={col.key}
-              className={`px-1.5 py-0.5 ${isStickyCol ? `${stickyClass(col.key)} ${isSelected ? "!bg-accent/30" : ""}` : ""} ${col.fixedWidth ? `w-[${col.fixedWidth}px] min-w-[${col.fixedWidth}px] max-w-[${col.fixedWidth}px]` : ""}`}
-              style={isStickyCol ? stickyStyle(col.key, false) : undefined}
+              className={`px-1.5 py-0.5 ${sticky ? `bg-card ${isSelected ? "!bg-accent/30" : ""}` : ""}`}
+              style={mergeStyles(
+                sticky ? stickyStyle(col.key, false) : undefined,
+                fixedWidthStyle(col),
+              )}
               onClick={(e) => {
                 const tag = (e.target as HTMLElement).tagName;
                 if (["INPUT", "BUTTON", "SELECT"].includes(tag)) return;
@@ -253,7 +277,10 @@ export function FunnelTable({
     });
   }
 
-  const availableGroupOptions = GROUP_OPTIONS.filter((o) => !groupBy.includes(o.value));
+  // Additional group options (campaign is fixed, so only show others)
+  const availableGroupOptions = EXTRA_GROUP_OPTIONS.filter(
+    (o) => !effectiveGroupBy.includes(o.value)
+  );
 
   return (
     <div className="space-y-2">
@@ -262,11 +289,14 @@ export function FunnelTable({
         {/* Group selector — LEFT */}
         <div className="flex items-center gap-1.5 shrink-0">
           <Layers className="w-3.5 h-3.5 text-muted-foreground" />
-          {groupBy.length === 0 && (
-            <span className="text-xs text-muted-foreground">그룹 없음</span>
-          )}
-          {groupBy.map((key) => {
-            const opt = GROUP_OPTIONS.find((o) => o.value === key);
+          {/* Campaign is always shown as fixed chip */}
+          <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-md bg-primary/10 text-primary text-xs font-medium">
+            <Lock className="w-2.5 h-2.5 opacity-60" />
+            캠페인별
+          </span>
+          {/* Additional group chips (removable) */}
+          {effectiveGroupBy.filter((k) => k !== "campaign").map((key) => {
+            const opt = EXTRA_GROUP_OPTIONS.find((o) => o.value === key);
             return (
               <span
                 key={key}
@@ -334,18 +364,21 @@ export function FunnelTable({
             <TableHeader>
               <TableRow className="h-8">
                 <TableHead
-                  className={`w-[32px] min-w-[32px] px-1.5 ${stickyClass("checkbox")}`}
-                  style={stickyStyle("checkbox", true)}
+                  className="px-1.5 bg-card"
+                  style={mergeStyles(stickyStyle("checkbox", true), { width: 32, minWidth: 32, maxWidth: 32 })}
                 >
                   <Checkbox checked={allSelected} onCheckedChange={toggleAll} className="scale-90" />
                 </TableHead>
                 {columns.map((col) => {
-                  const isStickyCol = col.key in STICKY_OFFSETS;
+                  const sticky = isStickyCol(col.key);
                   return (
                     <TableHead
                       key={col.key}
-                      className={`text-[10px] font-semibold px-1.5 py-1 whitespace-nowrap ${isStickyCol ? stickyClass(col.key) : ""} ${col.width ?? ""} ${col.fixedWidth ? `w-[${col.fixedWidth}px] min-w-[${col.fixedWidth}px] max-w-[${col.fixedWidth}px]` : ""}`}
-                      style={isStickyCol ? stickyStyle(col.key, true) : undefined}
+                      className={`text-[10px] font-semibold px-1.5 py-1 whitespace-nowrap ${sticky ? "bg-card" : ""} ${col.width ?? ""}`}
+                      style={mergeStyles(
+                        sticky ? stickyStyle(col.key, true) : undefined,
+                        fixedWidthStyle(col),
+                      )}
                     >
                       {col.label}
                     </TableHead>
