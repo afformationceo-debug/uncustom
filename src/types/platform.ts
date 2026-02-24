@@ -103,7 +103,7 @@ export const FUNNEL_TO_LEGACY_STATUS: Record<FunnelStatus, CampaignInfluencerSta
 
 export type InfluencerPaymentStatus = "unpaid" | "pending" | "paid";
 export type ClientPaymentStatus = "uninvoiced" | "invoiced" | "paid";
-export type ReplyChannel = "email" | "dm_instagram" | "dm_tiktok" | "phone" | "other";
+export type ReplyChannel = "email" | "dm_instagram" | "dm_tiktok" | "dm_twitter" | "line" | "whatsapp" | "phone" | "other";
 
 export const INFLUENCER_PAYMENT_STATUSES: { value: InfluencerPaymentStatus; label: string; color: string }[] = [
   { value: "unpaid", label: "미지급", color: "#EF4444" },
@@ -126,8 +126,11 @@ export const OUTREACH_TYPES: { value: OutreachType; label: string }[] = [
 
 export const REPLY_CHANNELS: { value: ReplyChannel; label: string }[] = [
   { value: "email", label: "이메일" },
-  { value: "dm_instagram", label: "인스타 DM" },
+  { value: "dm_instagram", label: "인스타그램 DM" },
   { value: "dm_tiktok", label: "틱톡 DM" },
+  { value: "dm_twitter", label: "트위터 DM" },
+  { value: "line", label: "라인" },
+  { value: "whatsapp", label: "왓츠앱" },
   { value: "phone", label: "전화" },
   { value: "other", label: "기타" },
 ];
