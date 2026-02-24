@@ -1412,6 +1412,7 @@ export default function MasterPage() {
   const [selectedCampaignId, setSelectedCampaignId] = useState<string>("");
   const [assigning, setAssigning] = useState(false);
   const [ytEmailLoading, setYtEmailLoading] = useState(false);
+  const ytEmailPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Campaign assignments for each influencer
   const [campaignAssignments, setCampaignAssignments] = useState<CampaignAssignmentMap>({});
@@ -1463,6 +1464,7 @@ export default function MasterPage() {
   useEffect(() => {
     fetchCampaigns();
     fetchPlatformCounts();
+    return () => { if (ytEmailPollRef.current) clearInterval(ytEmailPollRef.current); };
   }, []);
 
   useEffect(() => {
@@ -1722,10 +1724,37 @@ export default function MasterPage() {
     setAssigning(false);
   }
 
+  function startYtEmailPolling(jobId: string, channelCount: number) {
+    if (ytEmailPollRef.current) clearInterval(ytEmailPollRef.current);
+    setYtEmailLoading(true);
+    ytEmailPollRef.current = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/extract/status?job_id=${jobId}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.status === "completed") {
+          if (ytEmailPollRef.current) { clearInterval(ytEmailPollRef.current); ytEmailPollRef.current = null; }
+          setYtEmailLoading(false);
+          const found = data.new_extracted ?? 0;
+          const processed = data.total_extracted ?? channelCount;
+          if (found > 0) {
+            toast.success(`이메일 추출 완료: ${processed}채널 중 ${found}개 이메일 발견`, { duration: 8000 });
+          } else {
+            toast(`이메일 추출 완료: ${processed}채널 검색했으나 이메일을 찾지 못했습니다`, { duration: 8000 });
+          }
+          fetchInfluencers();
+        } else if (data.status === "failed") {
+          if (ytEmailPollRef.current) { clearInterval(ytEmailPollRef.current); ytEmailPollRef.current = null; }
+          setYtEmailLoading(false);
+          toast.error("이메일 추출 실패");
+        }
+      } catch { /* silent */ }
+    }, 5000);
+  }
+
   async function handleYtEmailExtraction() {
     const ids = Array.from(selectedIds);
     if (ids.length === 0) { toast.error("인플루언서를 선택해주세요."); return; }
-    // Filter to YouTube only
     const ytIds = influencers.filter((inf) => inf.platform === "youtube" && ids.includes(inf.id)).map((inf) => inf.id);
     if (ytIds.length === 0) { toast.error("선택된 YouTube 인플루언서가 없습니다."); return; }
     setYtEmailLoading(true);
@@ -1738,12 +1767,13 @@ export default function MasterPage() {
       const data = await res.json();
       if (!res.ok) {
         toast.error(data.error ?? "YouTube 이메일 추출 실패");
+        setYtEmailLoading(false);
         return;
       }
-      toast.success(`YouTube 이메일 추출 시작: ${data.total_channels}채널 ($${(data.total_channels * 0.005).toFixed(3)})`);
+      toast(`YouTube 이메일 추출 중: ${data.total_channels}채널 ($${(data.total_channels * 0.005).toFixed(3)})`, { duration: 5000 });
+      startYtEmailPolling(data.job_id, data.total_channels);
     } catch {
       toast.error("YouTube 이메일 추출 요청 실패");
-    } finally {
       setYtEmailLoading(false);
     }
   }
@@ -1760,7 +1790,8 @@ export default function MasterPage() {
         toast.error(data.error ?? "이메일 추출 실패");
         return;
       }
-      toast.success(`${username ?? "YouTube"} 이메일 추출 시작 ($0.005)`);
+      toast(`${username ?? "YouTube"} 이메일 추출 중... ($0.005)`, { duration: 5000 });
+      startYtEmailPolling(data.job_id, 1);
     } catch {
       toast.error("이메일 추출 요청 실패");
     }
@@ -2380,16 +2411,20 @@ export default function MasterPage() {
           <Button size="sm" onClick={handleAssignToCampaign} disabled={assigning || !selectedCampaignId}>
             {assigning ? "배정 중..." : "캠페인에 배정"}
           </Button>
-          <div className="h-4 w-px bg-border" />
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={handleYtEmailExtraction}
-            disabled={ytEmailLoading}
-            className="text-red-600 border-red-200 hover:bg-red-50 dark:text-red-400 dark:border-red-800 dark:hover:bg-red-950"
-          >
-            {ytEmailLoading ? "추출 중..." : "YT 이메일 추출"}
-          </Button>
+          {influencers.some((inf) => inf.platform === "youtube" && selectedIds.has(inf.id)) && (
+            <>
+              <div className="h-4 w-px bg-border" />
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleYtEmailExtraction}
+                disabled={ytEmailLoading}
+                className="text-red-600 border-red-200 hover:bg-red-50 dark:text-red-400 dark:border-red-800 dark:hover:bg-red-950"
+              >
+                {ytEmailLoading ? "추출 중..." : "YT 이메일 추출"}
+              </Button>
+            </>
+          )}
           <Button variant="ghost" size="sm" onClick={() => { setSelectedIds(new Set()); setSelectedCampaignId(""); setAutoFilterActive(false); }}>
             선택 해제
           </Button>
