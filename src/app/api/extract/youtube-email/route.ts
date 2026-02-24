@@ -9,13 +9,19 @@ import type { Json } from "@/types/database";
  * Finds YouTube influencers without email and extracts business emails from channel "About" pages.
  *
  * POST /api/extract/youtube-email
- * Body: { campaign_id?: string } — optional, if omitted works globally
+ * Body: { campaign_id?: string, influencer_ids?: string[] }
+ *   - influencer_ids: specific influencers to extract (from master page selection)
+ *   - campaign_id: filter to campaign influencers (optional)
+ *   - if neither, extracts all YouTube influencers without email (max 50)
  */
 export async function POST(request: Request) {
   try {
     const supabase = await createClient();
     const body = await request.json();
-    const { campaign_id } = body;
+    const { campaign_id, influencer_ids } = body as {
+      campaign_id?: string;
+      influencer_ids?: string[];
+    };
 
     // Check if there's already a running youtube_email job
     const { data: existingJob } = await supabase
@@ -32,42 +38,52 @@ export async function POST(request: Request) {
       }, { status: 409 });
     }
 
-    // Find YouTube influencers without email
-    let query = supabase
-      .from("influencers")
-      .select("id, username, platform_id")
-      .eq("platform", "youtube")
-      .is("email", null)
-      .limit(50);
+    let ytInfluencers: Array<{ id: string; username: string | null; platform_id: string | null }>;
 
-    // If campaign_id specified, filter to campaign influencers
-    if (campaign_id) {
-      const { data: ciData } = await supabase
-        .from("campaign_influencers")
-        .select("influencer_id")
-        .eq("campaign_id", campaign_id);
+    if (influencer_ids && influencer_ids.length > 0) {
+      // Specific influencers selected (from master page)
+      // Allow even if they already have email (user explicitly wants re-extraction)
+      const allInfs: typeof ytInfluencers = [];
+      for (let i = 0; i < influencer_ids.length; i += 100) {
+        const chunk = influencer_ids.slice(i, i + 100);
+        const { data } = await supabase
+          .from("influencers")
+          .select("id, username, platform_id")
+          .eq("platform", "youtube")
+          .in("id", chunk);
+        if (data) allInfs.push(...(data as typeof ytInfluencers));
+      }
+      ytInfluencers = allInfs.slice(0, 50);
+    } else {
+      // Auto-find YouTube influencers without email
+      let query = supabase
+        .from("influencers")
+        .select("id, username, platform_id")
+        .eq("platform", "youtube")
+        .is("email", null)
+        .limit(50);
 
-      if (!ciData || ciData.length === 0) {
-        return NextResponse.json({ error: "캠페인에 인플루언서가 없습니다" }, { status: 404 });
+      if (campaign_id) {
+        const { data: ciData } = await supabase
+          .from("campaign_influencers")
+          .select("influencer_id")
+          .eq("campaign_id", campaign_id);
+
+        if (!ciData || ciData.length === 0) {
+          return NextResponse.json({ error: "캠페인에 인플루언서가 없습니다" }, { status: 404 });
+        }
+        query = query.in("id", ciData.map((ci) => ci.influencer_id));
       }
 
-      const infIds = ciData.map((ci) => ci.influencer_id);
-      query = query.in("id", infIds);
+      const { data: influencers } = await query;
+      ytInfluencers = (influencers ?? []) as typeof ytInfluencers;
     }
 
-    const { data: influencers } = await query;
-    const ytInfluencers = (influencers ?? []) as Array<{ id: string; username: string | null; platform_id: string | null }>;
-
     if (ytInfluencers.length === 0) {
-      // Count total YouTube influencers for context
-      const { count } = await supabase
-        .from("influencers")
-        .select("id", { count: "exact", head: true })
-        .eq("platform", "youtube");
-
       return NextResponse.json({
-        message: "이메일이 없는 YouTube 인플루언서가 없습니다",
-        total_youtube: count ?? 0,
+        message: influencer_ids?.length
+          ? "선택한 인플루언서 중 YouTube 계정이 없습니다"
+          : "이메일이 없는 YouTube 인플루언서가 없습니다",
         without_email: 0,
       });
     }

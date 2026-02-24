@@ -58,6 +58,7 @@ import {
   Download,
   FileSpreadsheet,
   Loader2,
+  Zap,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -178,6 +179,7 @@ type RenderHelpers = {
   formatEngagement: (rate: number | string | null) => string | null;
   getProfileUrl: (inf: Influencer) => string;
   getRawField: (inf: Influencer, field: string) => unknown;
+  onYtEmail?: (id: string, username: string | null) => void;
 };
 
 function getProfileUrl(inf: Influencer): string {
@@ -645,7 +647,7 @@ function getColumnsForPlatform(platform: PlatformFilter): ColumnDef[] {
   const emailCol: ColumnDef = {
     key: "email",
     label: "이메일",
-    render: (inf) =>
+    render: (inf, helpers) =>
       inf.email ? (
         <div className="flex items-center gap-1.5">
           <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-green-100 dark:bg-green-950 flex-shrink-0">
@@ -660,6 +662,19 @@ function getColumnsForPlatform(platform: PlatformFilter): ColumnDef[] {
             <TooltipContent>{inf.email}</TooltipContent>
           </Tooltip>
         </div>
+      ) : inf.platform === "youtube" && helpers.onYtEmail ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              onClick={(e) => { e.stopPropagation(); helpers.onYtEmail!(inf.id, inf.username); }}
+              className="flex items-center gap-1 text-[10px] text-red-500 hover:text-red-700 dark:hover:text-red-300 transition-colors"
+            >
+              <Zap className="w-3 h-3" />
+              <span>이메일 추출</span>
+            </button>
+          </TooltipTrigger>
+          <TooltipContent>YouTube 채널에서 비즈니스 이메일 추출 ($0.005)</TooltipContent>
+        </Tooltip>
       ) : (
         <span className="text-muted-foreground text-xs">-</span>
       ),
@@ -1396,6 +1411,7 @@ export default function MasterPage() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [selectedCampaignId, setSelectedCampaignId] = useState<string>("");
   const [assigning, setAssigning] = useState(false);
+  const [ytEmailLoading, setYtEmailLoading] = useState(false);
 
   // Campaign assignments for each influencer
   const [campaignAssignments, setCampaignAssignments] = useState<CampaignAssignmentMap>({});
@@ -1706,6 +1722,50 @@ export default function MasterPage() {
     setAssigning(false);
   }
 
+  async function handleYtEmailExtraction() {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) { toast.error("인플루언서를 선택해주세요."); return; }
+    // Filter to YouTube only
+    const ytIds = influencers.filter((inf) => inf.platform === "youtube" && ids.includes(inf.id)).map((inf) => inf.id);
+    if (ytIds.length === 0) { toast.error("선택된 YouTube 인플루언서가 없습니다."); return; }
+    setYtEmailLoading(true);
+    try {
+      const res = await fetch("/api/extract/youtube-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ influencer_ids: ytIds }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error ?? "YouTube 이메일 추출 실패");
+        return;
+      }
+      toast.success(`YouTube 이메일 추출 시작: ${data.total_channels}채널 ($${(data.total_channels * 0.005).toFixed(3)})`);
+    } catch {
+      toast.error("YouTube 이메일 추출 요청 실패");
+    } finally {
+      setYtEmailLoading(false);
+    }
+  }
+
+  async function handleSingleYtEmail(influencerId: string, username: string | null) {
+    try {
+      const res = await fetch("/api/extract/youtube-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ influencer_ids: [influencerId] }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error ?? "이메일 추출 실패");
+        return;
+      }
+      toast.success(`${username ?? "YouTube"} 이메일 추출 시작 ($0.005)`);
+    } catch {
+      toast.error("이메일 추출 요청 실패");
+    }
+  }
+
   async function fetchEnrichStats() {
     try {
       const res = await fetch("/api/import/enrich-batch");
@@ -1844,7 +1904,7 @@ export default function MasterPage() {
   const totalAll = Object.values(platformCounts).reduce((a, b) => a + b, 0);
 
   const columns = getColumnsForPlatform(platformFilter);
-  const helpers: RenderHelpers = { formatCount, formatEngagement, getProfileUrl, getRawField };
+  const helpers: RenderHelpers = { formatCount, formatEngagement, getProfileUrl, getRawField, onYtEmail: handleSingleYtEmail };
 
   return (
     <div className="space-y-4">
@@ -2319,6 +2379,16 @@ export default function MasterPage() {
           )}
           <Button size="sm" onClick={handleAssignToCampaign} disabled={assigning || !selectedCampaignId}>
             {assigning ? "배정 중..." : "캠페인에 배정"}
+          </Button>
+          <div className="h-4 w-px bg-border" />
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleYtEmailExtraction}
+            disabled={ytEmailLoading}
+            className="text-red-600 border-red-200 hover:bg-red-50 dark:text-red-400 dark:border-red-800 dark:hover:bg-red-950"
+          >
+            {ytEmailLoading ? "추출 중..." : "YT 이메일 추출"}
           </Button>
           <Button variant="ghost" size="sm" onClick={() => { setSelectedIds(new Set()); setSelectedCampaignId(""); setAutoFilterActive(false); }}>
             선택 해제
