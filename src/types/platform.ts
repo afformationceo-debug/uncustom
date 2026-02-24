@@ -131,6 +131,32 @@ export const OUTREACH_TYPES: { value: OutreachType; label: string }[] = [
   { value: "dm", label: "DM" },
 ];
 
+// Context-aware funnel status label (shipping campaigns use different labels)
+export function getFunnelStatusLabel(status: string, campaignType?: string): string {
+  if (campaignType === "shipping") {
+    if (status === "visit_scheduled") return "배송완료";
+    if (status === "visited") return "수령완료";
+  }
+  return FUNNEL_STATUSES.find((s) => s.value === status)?.label ?? status;
+}
+
+export type ShippingCarrier = "cj" | "logen" | "hanjin" | "post" | "lotte" | "fedex" | "ups" | "dhl" | "ems" | "sf" | "yamato" | "other";
+
+export const SHIPPING_CARRIERS: { value: ShippingCarrier; label: string }[] = [
+  { value: "cj", label: "CJ대한통운" },
+  { value: "logen", label: "로젠택배" },
+  { value: "hanjin", label: "한진택배" },
+  { value: "post", label: "우체국" },
+  { value: "lotte", label: "롯데택배" },
+  { value: "fedex", label: "FedEx" },
+  { value: "ups", label: "UPS" },
+  { value: "dhl", label: "DHL" },
+  { value: "ems", label: "EMS" },
+  { value: "sf", label: "SF Express" },
+  { value: "yamato", label: "야마토" },
+  { value: "other", label: "기타" },
+];
+
 export const REPLY_CHANNELS: { value: ReplyChannel; label: string }[] = [
   { value: "email", label: "이메일" },
   { value: "dm_instagram", label: "인스타그램 DM" },

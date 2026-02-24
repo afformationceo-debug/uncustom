@@ -14,6 +14,7 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { LayoutGrid } from "lucide-react";
 import type { Tables } from "@/types/database";
 import type { ColumnGroup } from "@/components/manage/funnel-columns";
+import { getDefaultGroups, migrateColumnGroups } from "@/components/manage/funnel-columns";
 import type { ManageFilters } from "@/components/manage/funnel-filters";
 import type { GroupByKey } from "@/components/manage/funnel-table";
 
@@ -38,17 +39,19 @@ export default function ManagePage() {
   );
 }
 
-// Load column groups from localStorage — default to ALL groups
+// Load column groups from localStorage with migration from old "execution" group
 function loadColumnGroups(): ColumnGroup[] {
-  if (typeof window === "undefined") return ["outreach", "confirm", "execution", "content", "settlement"];
+  if (typeof window === "undefined") return getDefaultGroups();
   try {
     const saved = localStorage.getItem("manage_column_groups");
     if (saved) {
       const parsed = JSON.parse(saved);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return migrateColumnGroups(parsed);
+      }
     }
   } catch { /* ignore */ }
-  return ["outreach", "confirm", "execution", "content", "settlement"];
+  return getDefaultGroups();
 }
 
 function ManagePageContent() {
@@ -58,6 +61,7 @@ function ManagePageContent() {
 
   // Campaign — null means "전체 캠페인"
   const [campaignId, setCampaignId] = useState<string | null>(null);
+  const [campaignType, setCampaignType] = useState<string | null>(null);
   const [initialized, setInitialized] = useState(false);
 
   // Data
@@ -96,6 +100,26 @@ function ManagePageContent() {
   useEffect(() => {
     setInitialized(true);
   }, []);
+
+  // Auto-select column groups when campaign changes
+  useEffect(() => {
+    if (!campaignId) {
+      setCampaignType(null);
+      setActiveGroups(getDefaultGroups(null));
+      return;
+    }
+    // Fetch campaign type
+    (async () => {
+      const { data } = await supabase
+        .from("campaigns")
+        .select("campaign_type")
+        .eq("id", campaignId)
+        .single();
+      const type = data?.campaign_type ?? "visit";
+      setCampaignType(type);
+      setActiveGroups(getDefaultGroups(type));
+    })();
+  }, [campaignId]);
 
   // Fetch data — works with or without campaignId
   const fetchData = useCallback(async () => {
@@ -275,6 +299,9 @@ function ManagePageContent() {
     setSummaryKey((k) => k + 1);
   }
 
+  // Campaign type label for header
+  const typeLabel = campaignType === "shipping" ? " (배송형)" : campaignType === "visit" ? " (방문형)" : "";
+
   return (
     <div className="space-y-3">
       {/* Header */}
@@ -285,7 +312,7 @@ function ManagePageContent() {
             인플루언서 관리
           </h2>
           <p className="text-xs text-muted-foreground">
-            {campaignId ? "캠페인별 퍼널 관리" : "전체 캠페인 통합 관리"}
+            {campaignId ? `캠페인별 퍼널 관리${typeLabel}` : "전체 캠페인 통합 관리"}
             {total > 0 && ` — ${total.toLocaleString()}명`}
           </p>
         </div>
@@ -296,7 +323,7 @@ function ManagePageContent() {
       </div>
 
       {/* Summary bar */}
-      <FunnelSummary campaignId={campaignId} refreshKey={summaryKey} />
+      <FunnelSummary campaignId={campaignId} campaignType={campaignType} refreshKey={summaryKey} />
 
       {/* Filters — inline multi-filter dropdowns */}
       <FunnelFilters

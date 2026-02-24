@@ -9,8 +9,9 @@ import {
   Popover, PopoverContent, PopoverTrigger,
 } from "@/components/ui/popover";
 import {
-  FUNNEL_STATUSES, PLATFORMS, REPLY_CHANNELS, OUTREACH_TYPES,
+  FUNNEL_STATUSES, PLATFORMS, REPLY_CHANNELS, OUTREACH_TYPES, SHIPPING_CARRIERS,
   INFLUENCER_PAYMENT_STATUSES, CLIENT_PAYMENT_STATUSES,
+  getFunnelStatusLabel,
 } from "@/types/platform";
 import { InlineCurrencyInput } from "./inline-currency-input";
 import { InlineSettlementEditor } from "./inline-settlement-editor";
@@ -22,17 +23,42 @@ type CampaignInfluencer = Tables<"campaign_influencers"> & {
   campaign?: { id: string; name: string; campaign_type?: string };
 };
 
-export type ColumnGroup = "basic" | "outreach" | "confirm" | "execution" | "shipping" | "content" | "settlement";
+// Column groups: "execution" split into "prepare" (shared) + "visit" (visit-only)
+export type ColumnGroup = "basic" | "outreach" | "confirm" | "prepare" | "visit" | "shipping" | "content" | "settlement";
 
 export const COLUMN_GROUPS: { value: ColumnGroup; label: string }[] = [
   { value: "basic", label: "기본" },
   { value: "outreach", label: "아웃리치" },
   { value: "confirm", label: "컨펌" },
-  { value: "execution", label: "실행(방문)" },
-  { value: "shipping", label: "실행(배송)" },
+  { value: "prepare", label: "준비" },
+  { value: "visit", label: "방문" },
+  { value: "shipping", label: "배송" },
   { value: "content", label: "콘텐츠" },
   { value: "settlement", label: "정산" },
 ];
+
+// Default groups by campaign type
+export function getDefaultGroups(campaignType?: string | null): ColumnGroup[] {
+  if (campaignType === "shipping") {
+    return ["outreach", "confirm", "prepare", "shipping", "content", "settlement"];
+  }
+  if (campaignType === "visit") {
+    return ["outreach", "confirm", "prepare", "visit", "content", "settlement"];
+  }
+  // All campaigns — show everything
+  return ["outreach", "confirm", "prepare", "visit", "shipping", "content", "settlement"];
+}
+
+// Migrate old "execution" group to new "prepare" + "visit"
+export function migrateColumnGroups(groups: ColumnGroup[]): ColumnGroup[] {
+  if ((groups as string[]).includes("execution")) {
+    const filtered = groups.filter((g) => g !== "execution" as ColumnGroup);
+    if (!filtered.includes("prepare")) filtered.push("prepare");
+    if (!filtered.includes("visit")) filtered.push("visit");
+    return filtered;
+  }
+  return groups;
+}
 
 export interface ColumnDef {
   key: string;
@@ -130,8 +156,16 @@ export const ALL_COLUMNS: ColumnDef[] = [
     group: "basic",
     width: "min-w-[100px] max-w-[140px]",
     render: (item) => {
-      const c = item.campaign as { name: string } | undefined;
-      return <span className="text-[11px] truncate block" title={c?.name}>{c?.name ?? "-"}</span>;
+      const c = item.campaign as { name: string; campaign_type?: string } | undefined;
+      const typeLabel = c?.campaign_type === "shipping" ? "배송" : "방문";
+      return (
+        <div className="flex items-center gap-1">
+          <span className="text-[11px] truncate block" title={c?.name}>{c?.name ?? "-"}</span>
+          <span className={`text-[9px] px-1 py-0 rounded ${c?.campaign_type === "shipping" ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" : "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"}`}>
+            {typeLabel}
+          </span>
+        </div>
+      );
     },
   },
   {
@@ -186,6 +220,8 @@ export const ALL_COLUMNS: ColumnDef[] = [
     group: "basic",
     render: (item) => {
       const current = FUNNEL_STATUSES.find((s) => s.value === item.funnel_status);
+      const campaignType = (item.campaign as { campaign_type?: string } | undefined)?.campaign_type;
+      const label = getFunnelStatusLabel(item.funnel_status, campaignType);
       return (
         <Badge
           variant="outline"
@@ -193,7 +229,7 @@ export const ALL_COLUMNS: ColumnDef[] = [
           style={{ borderColor: current?.color, color: current?.color }}
         >
           <div className="w-1.5 h-1.5 rounded-full shrink-0 mr-1" style={{ backgroundColor: current?.color }} />
-          {current?.label ?? item.funnel_status}
+          {label}
         </Badge>
       );
     },
@@ -384,11 +420,11 @@ export const ALL_COLUMNS: ColumnDef[] = [
     ),
   },
 
-  // === EXECUTION ===
+  // === PREPARE (shared: guideline + CRM — used by both visit & shipping) ===
   {
     key: "guideline_url",
     label: "가이드URL",
-    group: "execution",
+    group: "prepare",
     render: (item, onUpdate) => (
       <div className="flex items-center gap-0.5">
         <InlineText
@@ -408,7 +444,7 @@ export const ALL_COLUMNS: ColumnDef[] = [
   {
     key: "guideline_sent",
     label: "가이드전달",
-    group: "execution",
+    group: "prepare",
     render: (item, onUpdate) => (
       <Switch
         checked={item.guideline_sent}
@@ -420,7 +456,7 @@ export const ALL_COLUMNS: ColumnDef[] = [
   {
     key: "crm_registered",
     label: "CRM등록",
-    group: "execution",
+    group: "prepare",
     render: (item, onUpdate) => (
       <Switch
         checked={item.crm_registered}
@@ -432,7 +468,7 @@ export const ALL_COLUMNS: ColumnDef[] = [
   {
     key: "crm_note",
     label: "CRM메모",
-    group: "execution",
+    group: "prepare",
     render: (item, onUpdate) => (
       <InlineText
         value={item.crm_note}
@@ -442,10 +478,12 @@ export const ALL_COLUMNS: ColumnDef[] = [
       />
     ),
   },
+
+  // === VISIT (방문형 전용) ===
   {
     key: "visit_scheduled_date",
     label: "방문예정일",
-    group: "execution",
+    group: "visit",
     render: (item, onUpdate) => (
       <Input
         type="date"
@@ -458,7 +496,7 @@ export const ALL_COLUMNS: ColumnDef[] = [
   {
     key: "interpreter_needed",
     label: "통역배치",
-    group: "execution",
+    group: "visit",
     render: (item, onUpdate) => (
       <Switch
         checked={item.interpreter_needed}
@@ -470,7 +508,7 @@ export const ALL_COLUMNS: ColumnDef[] = [
   {
     key: "interpreter_name",
     label: "통역사",
-    group: "execution",
+    group: "visit",
     render: (item, onUpdate) => (
       <InlineText
         value={item.interpreter_name}
@@ -483,7 +521,7 @@ export const ALL_COLUMNS: ColumnDef[] = [
   {
     key: "visit_completed",
     label: "방문완료",
-    group: "execution",
+    group: "visit",
     render: (item, onUpdate) => (
       <Switch
         checked={item.visit_completed}
@@ -493,20 +531,7 @@ export const ALL_COLUMNS: ColumnDef[] = [
     ),
   },
 
-  // === SHIPPING (배송형) ===
-  {
-    key: "tracking_number",
-    label: "운송장번호",
-    group: "shipping",
-    render: (item, onUpdate) => (
-      <InlineText
-        value={item.tracking_number}
-        placeholder="운송장"
-        onSave={(v) => onUpdate(item.id, "tracking_number", v)}
-        className="w-28"
-      />
-    ),
-  },
+  // === SHIPPING (배송형 전용) ===
   {
     key: "shipping_address",
     label: "배송주소",
@@ -517,6 +542,35 @@ export const ALL_COLUMNS: ColumnDef[] = [
         placeholder="주소"
         onSave={(v) => onUpdate(item.id, "shipping_address", v)}
         className="w-32"
+      />
+    ),
+  },
+  {
+    key: "shipping_carrier",
+    label: "택배사",
+    group: "shipping",
+    render: (item, onUpdate) => (
+      <Select value={item.shipping_carrier ?? "__none__"} onValueChange={(v) => onUpdate(item.id, "shipping_carrier", v === "__none__" ? null : v)}>
+        <SelectTrigger className="w-24 h-6 text-[11px] px-2">
+          <SelectValue placeholder="-" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="__none__">-</SelectItem>
+          {SHIPPING_CARRIERS.map((c) => <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>)}
+        </SelectContent>
+      </Select>
+    ),
+  },
+  {
+    key: "tracking_number",
+    label: "운송장번호",
+    group: "shipping",
+    render: (item, onUpdate) => (
+      <InlineText
+        value={item.tracking_number}
+        placeholder="운송장"
+        onSave={(v) => onUpdate(item.id, "tracking_number", v)}
+        className="w-28"
       />
     ),
   },

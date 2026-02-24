@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ChevronDown, ChevronUp, AlertTriangle, DollarSign } from "lucide-react";
-import { FUNNEL_STATUSES } from "@/types/platform";
+import { FUNNEL_STATUSES, getFunnelStatusLabel } from "@/types/platform";
 
 interface SummaryData {
   statusCounts: Record<string, number>;
@@ -25,10 +25,11 @@ interface SummaryData {
 
 interface FunnelSummaryProps {
   campaignId: string | null;
+  campaignType?: string | null;
   refreshKey?: number;
 }
 
-export function FunnelSummary({ campaignId, refreshKey }: FunnelSummaryProps) {
+export function FunnelSummary({ campaignId, campaignType, refreshKey }: FunnelSummaryProps) {
   const [data, setData] = useState<SummaryData | null>(null);
   const [collapsed, setCollapsed] = useState(false);
 
@@ -85,7 +86,7 @@ export function FunnelSummary({ campaignId, refreshKey }: FunnelSummaryProps) {
                       >
                         {count}
                       </div>
-                      <div className="text-[10px] text-muted-foreground whitespace-nowrap">{s.label}</div>
+                      <div className="text-[10px] text-muted-foreground whitespace-nowrap">{getFunnelStatusLabel(s.value, campaignType ?? undefined)}</div>
                     </div>
                     {i < pipelineStatuses.length - 1 && (
                       <div className="text-muted-foreground/40 text-xs mx-0.5">&rarr;</div>

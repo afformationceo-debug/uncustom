@@ -514,6 +514,7 @@ export type Database = {
           shipping_received: boolean;
           shipping_received_at: string | null;
           tracking_number: string | null;
+          shipping_carrier: string | null;
           shipping_address: string | null;
           upload_url: string | null;
           content_metrics_cache: Json | null;
@@ -574,6 +575,7 @@ export type Database = {
           shipping_received?: boolean;
           shipping_received_at?: string | null;
           tracking_number?: string | null;
+          shipping_carrier?: string | null;
           shipping_address?: string | null;
           upload_url?: string | null;
           content_metrics_cache?: Json | null;
@@ -634,6 +636,7 @@ export type Database = {
           shipping_received?: boolean;
           shipping_received_at?: string | null;
           tracking_number?: string | null;
+          shipping_carrier?: string | null;
           shipping_address?: string | null;
           upload_url?: string | null;
           content_metrics_cache?: Json | null;
