@@ -81,8 +81,8 @@ function ManagePageContent() {
   // Column groups
   const [activeGroups, setActiveGroups] = useState<ColumnGroup[]>(loadColumnGroups);
 
-  // Grouping
-  const [groupBy, setGroupBy] = useState<GroupByKey>("none");
+  // Grouping (multi-level)
+  const [groupBy, setGroupBy] = useState<GroupByKey[]>([]);
 
   // Selection
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -233,6 +233,7 @@ function ManagePageContent() {
     if (debounceTimers.current[key]) clearTimeout(debounceTimers.current[key]);
 
     debounceTimers.current[key] = setTimeout(async () => {
+      delete debounceTimers.current[key];
       try {
         const res = await fetch(`/api/manage/${id}`, {
           method: "PATCH",
@@ -260,7 +261,7 @@ function ManagePageContent() {
         toast.error("저장 실패");
         fetchData();
       }
-    }, 300);
+    }, 100);
   }
 
   // Note editor — supports multiple text fields (notes, client_note, reply_summary, crm_note)

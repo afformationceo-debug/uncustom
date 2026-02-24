@@ -65,7 +65,7 @@ export interface ColumnDef {
   label: string;
   group: ColumnGroup;
   width?: string;
-  sticky?: boolean;
+  fixedWidth?: number;
   render: (
     item: CampaignInfluencer,
     onUpdate: (id: string, field: string, value: unknown) => void,
@@ -154,7 +154,7 @@ export const ALL_COLUMNS: ColumnDef[] = [
     key: "campaign_name",
     label: "캠페인",
     group: "basic",
-    width: "min-w-[100px] max-w-[140px]",
+    fixedWidth: 120,
     render: (item) => {
       const c = item.campaign as { name: string; campaign_type?: string } | undefined;
       const typeLabel = c?.campaign_type === "shipping" ? "배송" : "방문";
@@ -172,8 +172,7 @@ export const ALL_COLUMNS: ColumnDef[] = [
     key: "influencer",
     label: "인플루언서",
     group: "basic",
-    width: "min-w-[160px]",
-    sticky: true,
+    fixedWidth: 170,
     render: (item) => {
       const inf = item.influencer as unknown as Tables<"influencers"> | undefined;
       return (
@@ -199,6 +198,7 @@ export const ALL_COLUMNS: ColumnDef[] = [
     key: "platform",
     label: "플랫폼",
     group: "basic",
+    fixedWidth: 56,
     render: (item) => {
       const inf = item.influencer as unknown as Tables<"influencers"> | undefined;
       const p = PLATFORMS.find((pl) => pl.value === inf?.platform);
