@@ -696,6 +696,7 @@ export default function BrandsPage() {
                 <TableHead>플랫폼</TableHead>
                 <TableHead>업종</TableHead>
                 <TableHead className="text-right">팔로워</TableHead>
+                <TableHead className="text-right">팔로잉</TableHead>
                 <TableHead className="text-right">참여율</TableHead>
                 <TableHead>타겟 국가</TableHead>
                 <TableHead className="text-right">평균좋아요</TableHead>
@@ -705,6 +706,7 @@ export default function BrandsPage() {
                 <TableHead className="text-right">게시물</TableHead>
                 <TableHead>품질점수</TableHead>
                 <TableHead>포스팅빈도</TableHead>
+                <TableHead>외부링크</TableHead>
                 <TableHead>마지막 분석</TableHead>
                 <TableHead className="w-32">액션</TableHead>
               </TableRow>
@@ -713,7 +715,7 @@ export default function BrandsPage() {
               {loading ? (
                 <TableRow>
                   <TableCell
-                    colSpan={16}
+                    colSpan={18}
                     className="text-center py-12 text-muted-foreground"
                   >
                     <Loader2 className="w-5 h-5 animate-spin mx-auto mb-2" />
@@ -722,7 +724,7 @@ export default function BrandsPage() {
                 </TableRow>
               ) : filteredBrands.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={16} className="text-center py-12">
+                  <TableCell colSpan={18} className="text-center py-12">
                     <div className="flex flex-col items-center gap-2 text-muted-foreground">
                       <Building2 className="w-8 h-8 opacity-30" />
                       <p className="font-medium">등록된 브랜드가 없습니다</p>
@@ -818,6 +820,12 @@ export default function BrandsPage() {
                         {formatNumber(brand.follower_count)}
                       </span>
                     </TableCell>
+                    {/* 팔로잉 */}
+                    <TableCell className="text-right">
+                      <span className="text-sm tabular-nums">
+                        {formatNumber(brand.following_count)}
+                      </span>
+                    </TableCell>
                     <TableCell className="text-right">
                       <span className="text-sm tabular-nums">
                         {brand.engagement_rate != null
@@ -900,6 +908,23 @@ export default function BrandsPage() {
                       <span className="text-xs text-muted-foreground">
                         {brand.posting_frequency ?? "-"}
                       </span>
+                    </TableCell>
+                    {/* 외부링크 */}
+                    <TableCell>
+                      {brand.external_url ? (
+                        <a
+                          href={brand.external_url.startsWith("http") ? brand.external_url : `https://${brand.external_url}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs text-blue-500 hover:underline inline-flex items-center gap-1 max-w-[120px] truncate"
+                          title={brand.external_url}
+                        >
+                          <ExternalLink className="w-3 h-3 shrink-0" />
+                          {brand.external_url.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, "")}
+                        </a>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">-</span>
+                      )}
                     </TableCell>
                     <TableCell>
                       <span className="text-xs text-muted-foreground">

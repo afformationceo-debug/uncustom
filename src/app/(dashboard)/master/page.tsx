@@ -77,6 +77,7 @@ import { toast } from "sonner";
 import type { Tables } from "@/types/database";
 import { PLATFORMS, FUNNEL_STATUSES } from "@/types/platform";
 import type { FunnelStatus } from "@/types/platform";
+import { InfluencerDetailTabs } from "@/components/master/influencer-detail-tabs";
 import { useRealtime } from "@/hooks/use-realtime";
 
 type Influencer = Tables<"influencers">;
@@ -3629,6 +3630,9 @@ function ExpandedDetail({
           </div>
         )}
       </div>
+
+      {/* Detail Tabs: Brand Collaborations, Commerce, Analytics */}
+      <InfluencerDetailTabs influencerId={inf.id} />
 
       {/* Raw data preview (collapsed by default) */}
       {raw && <RawDataPreview raw={raw} />}

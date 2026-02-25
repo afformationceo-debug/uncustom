@@ -45,7 +45,7 @@ import {
 import { toast } from "sonner";
 import type { Tables } from "@/types/database";
 import { useRealtime } from "@/hooks/use-realtime";
-import DOMPurify from "dompurify";
+import type DOMPurifyType from "dompurify";
 
 type Influencer = Tables<"influencers">;
 type EmailTemplate = Tables<"email_templates">;
@@ -408,8 +408,14 @@ function EmailSendPageContent() {
     setSending(false);
   }
 
-  // Sanitize preview HTML for safe rendering
+  // Sanitize preview HTML for safe rendering (DOMPurify is browser-only)
+  const [DOMPurify, setDOMPurify] = useState<typeof DOMPurifyType | null>(null);
+  useEffect(() => {
+    import("dompurify").then((mod) => setDOMPurify(() => mod.default));
+  }, []);
+
   const sanitizedPreviewHtml = useMemo(() => {
+    if (!DOMPurify) return previewHtml;
     return DOMPurify.sanitize(previewHtml, {
       ALLOWED_TAGS: [
         "p", "br", "strong", "em", "a", "ul", "ol", "li",
@@ -418,7 +424,7 @@ function EmailSendPageContent() {
       ],
       ALLOWED_ATTR: ["href", "target", "rel", "class", "style", "src", "alt", "width", "height"],
     });
-  }, [previewHtml]);
+  }, [previewHtml, DOMPurify]);
 
   return (
     <div className="space-y-6">

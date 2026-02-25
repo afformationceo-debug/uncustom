@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import type { Tables } from "@/types/database";
+import { AIInsightsBar } from "@/components/ai/ai-insights-bar";
 
 type Campaign = Tables<"campaigns">;
 type ExtractionJob = Tables<"extraction_jobs">;
@@ -244,6 +245,9 @@ export default async function DashboardPage() {
   return (
     <div className="space-y-8">
       <h1 className="text-2xl font-bold text-foreground">대시보드</h1>
+
+      {/* AI Insights */}
+      <AIInsightsBar pageContext="home" />
 
       {/* Stat cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">

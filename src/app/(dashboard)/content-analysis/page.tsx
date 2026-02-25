@@ -40,6 +40,7 @@ import type { Tables } from "@/types/database";
 import { PLATFORMS } from "@/types/platform";
 
 type BrandContent = Tables<"brand_influencer_contents">;
+type BrandAccount = Tables<"brand_accounts">;
 
 const CONTENT_TYPES = ["all", "reel", "post", "video", "short", "tweet", "story"];
 
@@ -53,6 +54,7 @@ function formatNumber(n: number | null | undefined): string {
 export default function ContentAnalysisPage() {
   const supabase = createClient();
   const [contents, setContents] = useState<BrandContent[]>([]);
+  const [brands, setBrands] = useState<BrandAccount[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Filters
@@ -60,9 +62,11 @@ export default function ContentAnalysisPage() {
   const [platformFilter, setPlatformFilter] = useState("all");
   const [contentTypeFilter, setContentTypeFilter] = useState("all");
   const [sponsoredFilter, setSponsoredFilter] = useState("all");
+  const [brandFilter, setBrandFilter] = useState("all");
 
   useEffect(() => {
     fetchContents();
+    fetchBrands();
   }, []);
 
   async function fetchContents() {
@@ -81,11 +85,20 @@ export default function ContentAnalysisPage() {
     setLoading(false);
   }
 
+  async function fetchBrands() {
+    const { data } = await supabase
+      .from("brand_accounts")
+      .select("id, brand_name, username, platform")
+      .order("brand_name");
+    setBrands((data as BrandAccount[]) ?? []);
+  }
+
   const filteredContents = contents.filter((c) => {
     if (platformFilter !== "all" && c.platform !== platformFilter) return false;
     if (contentTypeFilter !== "all" && c.content_type !== contentTypeFilter) return false;
     if (sponsoredFilter === "sponsored" && !c.is_sponsored) return false;
     if (sponsoredFilter === "organic" && !c.is_organic) return false;
+    if (brandFilter !== "all" && c.brand_account_id !== brandFilter) return false;
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
       if (
@@ -219,6 +232,19 @@ export default function ContentAnalysisPage() {
             <SelectItem value="organic">오가닉</SelectItem>
           </SelectContent>
         </Select>
+        <Select value={brandFilter} onValueChange={setBrandFilter}>
+          <SelectTrigger className="w-40 h-9">
+            <SelectValue placeholder="브랜드" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">전체 브랜드</SelectItem>
+            {brands.map((b) => (
+              <SelectItem key={b.id} value={b.id}>
+                {b.brand_name || b.username} ({b.platform})
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       {/* Content Table */}
@@ -242,6 +268,8 @@ export default function ContentAnalysisPage() {
                 <TableHead>멘션타입</TableHead>
                 <TableHead>감성</TableHead>
                 <TableHead>구분</TableHead>
+                <TableHead className="min-w-[100px]">감지상품</TableHead>
+                <TableHead>발견경로</TableHead>
                 <TableHead>게시일</TableHead>
                 <TableHead className="w-10" />
               </TableRow>
@@ -249,14 +277,14 @@ export default function ContentAnalysisPage() {
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={17} className="text-center py-12">
+                  <TableCell colSpan={19} className="text-center py-12">
                     <Loader2 className="w-5 h-5 animate-spin mx-auto mb-2" />
                     <span className="text-muted-foreground">로딩 중...</span>
                   </TableCell>
                 </TableRow>
               ) : filteredContents.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={17} className="text-center py-12">
+                  <TableCell colSpan={19} className="text-center py-12">
                     <Film className="w-8 h-8 mx-auto mb-2 opacity-30" />
                     <p className="text-muted-foreground font-medium">콘텐츠가 없습니다</p>
                     <p className="text-sm text-muted-foreground">
@@ -428,6 +456,57 @@ export default function ContentAnalysisPage() {
                         >
                           오가닉
                         </Badge>
+                      )}
+                    </TableCell>
+                    {/* 감지상품 */}
+                    <TableCell>
+                      {content.detected_products && content.detected_products.length > 0 ? (
+                        <div className="flex flex-wrap gap-1">
+                          {content.detected_products.slice(0, 2).map((p, i) => (
+                            <Badge
+                              key={i}
+                              variant="secondary"
+                              className="text-[10px] px-1.5 py-0"
+                            >
+                              {p}
+                            </Badge>
+                          ))}
+                          {content.detected_products.length > 2 && (
+                            <Badge
+                              variant="outline"
+                              className="text-[10px] px-1.5 py-0 text-muted-foreground"
+                            >
+                              +{content.detected_products.length - 2}
+                            </Badge>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">-</span>
+                      )}
+                    </TableCell>
+                    {/* 발견경로 */}
+                    <TableCell>
+                      {content.discovered_via ? (
+                        <Badge
+                          variant="outline"
+                          className={`text-[10px] ${
+                            content.discovered_via === "tagged_scraper"
+                              ? "border-blue-300 text-blue-600 dark:border-blue-700 dark:text-blue-400"
+                              : content.discovered_via === "mention_search"
+                                ? "border-purple-300 text-purple-600 dark:border-purple-700 dark:text-purple-400"
+                                : "border-muted text-muted-foreground"
+                          }`}
+                        >
+                          {content.discovered_via === "tagged_scraper"
+                            ? "태그 스크래퍼"
+                            : content.discovered_via === "mention_search"
+                              ? "멘션 검색"
+                              : content.discovered_via === "manual"
+                                ? "수동"
+                                : content.discovered_via}
+                        </Badge>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">-</span>
                       )}
                     </TableCell>
                     <TableCell>
