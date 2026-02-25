@@ -1,4 +1,7 @@
-import { createClient } from "@/lib/supabase/server";
+"use client";
+
+import { useState, useEffect } from "react";
+import { createClient } from "@/lib/supabase/client";
 import {
   Card,
   CardContent,
@@ -20,14 +23,10 @@ import {
   XCircle,
   Send,
   Download,
+  Loader2,
 } from "lucide-react";
 import Link from "next/link";
-import type { Tables } from "@/types/database";
 import { AIInsightsBar } from "@/components/ai/ai-insights-bar";
-
-type Campaign = Tables<"campaigns">;
-type ExtractionJob = Tables<"extraction_jobs">;
-type EmailLog = Tables<"email_logs">;
 
 const campaignStatusMap: Record<
   string,
@@ -69,140 +68,202 @@ function timeAgo(dateString: string): string {
   return new Date(dateString).toLocaleDateString("ko-KR");
 }
 
-export default async function DashboardPage() {
-  const supabase = await createClient();
+interface CampaignRow {
+  id: string;
+  name: string;
+  status: string;
+  created_at: string;
+}
 
-  // --- Stat card queries ---
-  const [
-    { count: campaignCount },
-    { count: activeCampaignCount },
-    { count: campaignInfluencerCount },
-    { count: influencerCount },
-    { count: emailCount },
-    { count: sentEmailCount },
-    { count: contentCount },
-    { count: unreadThreadCount },
-  ] = await Promise.all([
-    supabase.from("campaigns").select("*", { count: "exact", head: true }),
-    supabase
-      .from("campaigns")
-      .select("*", { count: "exact", head: true })
-      .eq("status", "active"),
-    supabase
-      .from("campaign_influencers")
-      .select("*", { count: "exact", head: true }),
-    supabase
-      .from("influencers")
-      .select("*", { count: "exact", head: true }),
-    supabase.from("email_logs").select("*", { count: "exact", head: true }),
-    supabase
-      .from("email_logs")
-      .select("*", { count: "exact", head: true })
-      .eq("status", "sent"),
-    supabase
-      .from("influencer_contents")
-      .select("*", { count: "exact", head: true }),
-    supabase
-      .from("email_threads")
-      .select("*", { count: "exact", head: true })
-      .eq("unread", true),
-  ]);
+interface ExtractionJobRow {
+  id: string;
+  status: string;
+  type: string;
+  platform: string;
+  total_extracted: number | null;
+  new_extracted: number | null;
+  created_at: string;
+  campaigns: { name: string } | null;
+}
 
-  // --- Recent campaigns (5 most recent with influencer counts) ---
-  const { data: recentCampaignsData } = await supabase
-    .from("campaigns")
-    .select("*")
-    .order("created_at", { ascending: false })
-    .limit(5);
+interface EmailLogRow {
+  id: string;
+  status: string;
+  round_number: number | null;
+  created_at: string;
+  campaigns: { name: string } | null;
+  influencers: { username: string | null; display_name: string | null } | null;
+}
 
-  const recentCampaigns = (recentCampaignsData as Campaign[]) ?? [];
+type ActivityItem =
+  | { type: "extraction"; data: ExtractionJobRow; created_at: string }
+  | { type: "email"; data: EmailLogRow; created_at: string };
 
-  // Get influencer counts and email counts per recent campaign
-  const campaignIds = recentCampaigns.map((c) => c.id);
-  const [
-    { data: campaignInfluencerData },
-    { data: campaignEmailData },
-  ] = await Promise.all([
-    campaignIds.length > 0
-      ? supabase
-          .from("campaign_influencers")
-          .select("campaign_id")
-          .in("campaign_id", campaignIds)
-      : Promise.resolve({ data: [] }),
-    campaignIds.length > 0
-      ? supabase
-          .from("email_logs")
-          .select("campaign_id")
-          .in("campaign_id", campaignIds)
-      : Promise.resolve({ data: [] }),
-  ]);
+interface DashboardStats {
+  campaignCount: number;
+  activeCampaignCount: number;
+  campaignInfluencerCount: number;
+  influencerCount: number;
+  emailCount: number;
+  sentEmailCount: number;
+  contentCount: number;
+  unreadThreadCount: number;
+}
 
-  const influencerCountByCampaign: Record<string, number> = {};
-  for (const row of (campaignInfluencerData as { campaign_id: string }[]) ?? []) {
-    influencerCountByCampaign[row.campaign_id] =
-      (influencerCountByCampaign[row.campaign_id] ?? 0) + 1;
-  }
+function StatCardSkeleton() {
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between pb-2">
+        <div className="h-4 w-20 bg-muted animate-pulse rounded" />
+        <div className="h-8 w-8 bg-muted animate-pulse rounded-lg" />
+      </CardHeader>
+      <CardContent>
+        <div className="h-8 w-16 bg-muted animate-pulse rounded mb-1" />
+        <div className="h-3 w-24 bg-muted animate-pulse rounded" />
+      </CardContent>
+    </Card>
+  );
+}
 
-  const emailCountByCampaign: Record<string, number> = {};
-  for (const row of (campaignEmailData as { campaign_id: string }[]) ?? []) {
-    emailCountByCampaign[row.campaign_id] =
-      (emailCountByCampaign[row.campaign_id] ?? 0) + 1;
-  }
+function ListSkeleton() {
+  return (
+    <div className="space-y-3">
+      {[1, 2, 3].map((i) => (
+        <div key={i} className="h-16 bg-muted/50 animate-pulse rounded-lg" />
+      ))}
+    </div>
+  );
+}
 
-  // --- Recent activity: extraction jobs + email sends ---
-  const [{ data: recentJobsData }, { data: recentEmailsData }] =
-    await Promise.all([
-      supabase
-        .from("extraction_jobs")
-        .select("*, campaigns(name)")
-        .order("created_at", { ascending: false })
-        .limit(5),
-      supabase
-        .from("email_logs")
-        .select("*, campaigns(name), influencers(username, display_name)")
-        .order("created_at", { ascending: false })
-        .limit(5),
-    ]);
+export default function DashboardPage() {
+  const supabase = createClient();
+  const [loading, setLoading] = useState(true);
+  const [stats, setStats] = useState<DashboardStats>({
+    campaignCount: 0,
+    activeCampaignCount: 0,
+    campaignInfluencerCount: 0,
+    influencerCount: 0,
+    emailCount: 0,
+    sentEmailCount: 0,
+    contentCount: 0,
+    unreadThreadCount: 0,
+  });
+  const [recentCampaigns, setRecentCampaigns] = useState<CampaignRow[]>([]);
+  const [influencerCountByCampaign, setInfluencerCountByCampaign] = useState<Record<string, number>>({});
+  const [emailCountByCampaign, setEmailCountByCampaign] = useState<Record<string, number>>({});
+  const [activityFeed, setActivityFeed] = useState<ActivityItem[]>([]);
 
-  type ExtractionJobWithCampaign = ExtractionJob & {
-    campaigns: { name: string } | null;
-  };
-  type EmailLogWithRelations = EmailLog & {
-    campaigns: { name: string } | null;
-    influencers: { username: string | null; display_name: string | null } | null;
-  };
+  useEffect(() => {
+    async function fetchDashboard() {
+      try {
+        // --- Stat card queries (all parallel) ---
+        const [
+          { count: campaignCount },
+          { count: activeCampaignCount },
+          { count: campaignInfluencerCount },
+          { count: influencerCount },
+          { count: emailCount },
+          { count: sentEmailCount },
+          { count: contentCount },
+          { count: unreadThreadCount },
+        ] = await Promise.all([
+          supabase.from("campaigns").select("*", { count: "exact", head: true }),
+          supabase.from("campaigns").select("*", { count: "exact", head: true }).eq("status", "active"),
+          supabase.from("campaign_influencers").select("*", { count: "exact", head: true }),
+          supabase.from("influencers").select("*", { count: "exact", head: true }),
+          supabase.from("email_logs").select("*", { count: "exact", head: true }),
+          supabase.from("email_logs").select("*", { count: "exact", head: true }).eq("status", "sent"),
+          supabase.from("influencer_contents").select("*", { count: "exact", head: true }),
+          supabase.from("email_threads").select("*", { count: "exact", head: true }).eq("unread", true),
+        ]);
 
-  const recentJobs =
-    (recentJobsData as ExtractionJobWithCampaign[]) ?? [];
-  const recentEmails =
-    (recentEmailsData as EmailLogWithRelations[]) ?? [];
+        setStats({
+          campaignCount: campaignCount ?? 0,
+          activeCampaignCount: activeCampaignCount ?? 0,
+          campaignInfluencerCount: campaignInfluencerCount ?? 0,
+          influencerCount: influencerCount ?? 0,
+          emailCount: emailCount ?? 0,
+          sentEmailCount: sentEmailCount ?? 0,
+          contentCount: contentCount ?? 0,
+          unreadThreadCount: unreadThreadCount ?? 0,
+        });
 
-  // Build a unified activity feed sorted by created_at
-  type ActivityItem =
-    | { type: "extraction"; data: ExtractionJobWithCampaign; created_at: string }
-    | { type: "email"; data: EmailLogWithRelations; created_at: string };
+        // --- Recent campaigns ---
+        const { data: recentCampaignsData } = await supabase
+          .from("campaigns")
+          .select("id, name, status, created_at")
+          .order("created_at", { ascending: false })
+          .limit(5);
 
-  const activityFeed: ActivityItem[] = [
-    ...recentJobs.map(
-      (j) =>
-        ({ type: "extraction", data: j, created_at: j.created_at }) as ActivityItem
-    ),
-    ...recentEmails.map(
-      (e) =>
-        ({ type: "email", data: e, created_at: e.created_at }) as ActivityItem
-    ),
-  ]
-    .sort(
-      (a, b) =>
-        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-    )
-    .slice(0, 8);
+        const campaigns = (recentCampaignsData as CampaignRow[]) ?? [];
+        setRecentCampaigns(campaigns);
 
-  // --- Stat cards ---
-  const stats = [
+        // --- Per-campaign counts + activity feed (parallel) ---
+        const campaignIds = campaigns.map((c) => c.id);
+
+        const [
+          { data: ciData },
+          { data: ceData },
+          { data: recentJobsData },
+          { data: recentEmailsData },
+        ] = await Promise.all([
+          campaignIds.length > 0
+            ? supabase.from("campaign_influencers").select("campaign_id").in("campaign_id", campaignIds)
+            : Promise.resolve({ data: [] }),
+          campaignIds.length > 0
+            ? supabase.from("email_logs").select("campaign_id").in("campaign_id", campaignIds)
+            : Promise.resolve({ data: [] }),
+          supabase
+            .from("extraction_jobs")
+            .select("id, status, type, platform, total_extracted, new_extracted, created_at, campaigns(name)")
+            .order("created_at", { ascending: false })
+            .limit(5),
+          supabase
+            .from("email_logs")
+            .select("id, status, round_number, created_at, campaigns(name), influencers(username, display_name)")
+            .order("created_at", { ascending: false })
+            .limit(5),
+        ]);
+
+        // Influencer counts
+        const infCountMap: Record<string, number> = {};
+        for (const row of (ciData as { campaign_id: string }[]) ?? []) {
+          infCountMap[row.campaign_id] = (infCountMap[row.campaign_id] ?? 0) + 1;
+        }
+        setInfluencerCountByCampaign(infCountMap);
+
+        // Email counts
+        const emlCountMap: Record<string, number> = {};
+        for (const row of (ceData as { campaign_id: string }[]) ?? []) {
+          emlCountMap[row.campaign_id] = (emlCountMap[row.campaign_id] ?? 0) + 1;
+        }
+        setEmailCountByCampaign(emlCountMap);
+
+        // Activity feed
+        const jobs = (recentJobsData as ExtractionJobRow[]) ?? [];
+        const emails = (recentEmailsData as EmailLogRow[]) ?? [];
+        const feed: ActivityItem[] = [
+          ...jobs.map((j) => ({ type: "extraction" as const, data: j, created_at: j.created_at })),
+          ...emails.map((e) => ({ type: "email" as const, data: e, created_at: e.created_at })),
+        ]
+          .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+          .slice(0, 8);
+
+        setActivityFeed(feed);
+      } catch (err) {
+        console.error("Dashboard fetch error:", err);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    fetchDashboard();
+  }, []);
+
+  const statCards = [
     {
       title: "활성 캠페인",
-      value: `${activeCampaignCount ?? 0} / ${campaignCount ?? 0}`,
+      value: `${stats.activeCampaignCount} / ${stats.campaignCount}`,
       description: "진행중 / 전체",
       icon: Megaphone,
       color: "text-primary",
@@ -210,23 +271,23 @@ export default async function DashboardPage() {
     },
     {
       title: "인플루언서",
-      value: (influencerCount ?? 0).toLocaleString(),
-      description: `캠페인별 ${(campaignInfluencerCount ?? 0).toLocaleString()}건 배정`,
+      value: stats.influencerCount.toLocaleString(),
+      description: `캠페인별 ${stats.campaignInfluencerCount.toLocaleString()}건 배정`,
       icon: Users,
       color: "text-green-500",
       bg: "bg-green-500/10",
     },
     {
       title: "발송 이메일",
-      value: (emailCount ?? 0).toLocaleString(),
-      description: `${(sentEmailCount ?? 0).toLocaleString()}건 발송 완료`,
+      value: stats.emailCount.toLocaleString(),
+      description: `${stats.sentEmailCount.toLocaleString()}건 발송 완료`,
       icon: Mail,
       color: "text-purple-500",
       bg: "bg-purple-500/10",
     },
     {
       title: "콘텐츠",
-      value: (contentCount ?? 0).toLocaleString(),
+      value: stats.contentCount.toLocaleString(),
       description: "수집된 인플루언서 콘텐츠",
       icon: BarChart3,
       color: "text-orange-500",
@@ -234,7 +295,7 @@ export default async function DashboardPage() {
     },
     {
       title: "미확인 수신함",
-      value: (unreadThreadCount ?? 0).toLocaleString(),
+      value: stats.unreadThreadCount.toLocaleString(),
       description: "읽지 않은 스레드",
       icon: Inbox,
       color: "text-red-500",
@@ -251,24 +312,26 @@ export default async function DashboardPage() {
 
       {/* Stat cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-        {stats.map((stat) => (
-          <Card key={stat.title}>
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                {stat.title}
-              </CardTitle>
-              <div className={`p-2 rounded-lg ${stat.bg}`}>
-                <stat.icon className={`w-4 h-4 ${stat.color}`} />
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{stat.value}</div>
-              <p className="text-xs text-muted-foreground mt-1">
-                {stat.description}
-              </p>
-            </CardContent>
-          </Card>
-        ))}
+        {loading
+          ? Array.from({ length: 5 }).map((_, i) => <StatCardSkeleton key={i} />)
+          : statCards.map((stat) => (
+              <Card key={stat.title}>
+                <CardHeader className="flex flex-row items-center justify-between pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground">
+                    {stat.title}
+                  </CardTitle>
+                  <div className={`p-2 rounded-lg ${stat.bg}`}>
+                    <stat.icon className={`w-4 h-4 ${stat.color}`} />
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">{stat.value}</div>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {stat.description}
+                  </p>
+                </CardContent>
+              </Card>
+            ))}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -288,7 +351,9 @@ export default async function DashboardPage() {
             <CardDescription>최근 생성된 캠페인 5개</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
-            {recentCampaigns.length === 0 ? (
+            {loading ? (
+              <ListSkeleton />
+            ) : recentCampaigns.length === 0 ? (
               <p className="text-sm text-muted-foreground text-center py-6">
                 캠페인이 없습니다.
               </p>
@@ -326,9 +391,7 @@ export default async function DashboardPage() {
                           {emlCount}건
                         </span>
                         <span>
-                          {new Date(campaign.created_at).toLocaleDateString(
-                            "ko-KR"
-                          )}
+                          {new Date(campaign.created_at).toLocaleDateString("ko-KR")}
                         </span>
                       </div>
                     </div>
@@ -347,7 +410,9 @@ export default async function DashboardPage() {
             <CardDescription>추출 작업 및 이메일 발송 내역</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
-            {activityFeed.length === 0 ? (
+            {loading ? (
+              <ListSkeleton />
+            ) : activityFeed.length === 0 ? (
               <p className="text-sm text-muted-foreground text-center py-6">
                 최근 활동이 없습니다.
               </p>
@@ -376,16 +441,14 @@ export default async function DashboardPage() {
                           </span>
                           <Badge
                             variant="secondary"
-                            className={
-                              extractionStatusColors[job.status] ?? ""
-                            }
+                            className={extractionStatusColors[job.status] ?? ""}
                           >
                             <StatusIcon className="w-3 h-3 mr-1" />
                             {statusInfo.label}
                           </Badge>
                         </div>
                         <p className="text-xs text-muted-foreground mt-0.5 truncate">
-                          {job.campaigns?.name ?? "알 수 없는 캠페인"} &middot;{" "}
+                          {job.campaigns?.name ?? "글로벌 추출"} &middot;{" "}
                           {job.type === "keyword" ? "키워드" : "태그"} &middot;{" "}
                           {job.platform}
                           {job.status === "completed" &&
