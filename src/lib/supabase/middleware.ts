@@ -2,6 +2,16 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
 export async function updateSession(request: NextRequest) {
+  // Public routes — skip auth entirely, just pass through
+  const publicPaths = ["/login", "/signup", "/api/auth/callback", "/api/email/webhook", "/api/email/inbound", "/proposals/p/", "/api/proposals/p/"];
+  const isPublicPath =
+    request.nextUrl.pathname === "/" ||
+    publicPaths.some((path) => request.nextUrl.pathname.startsWith(path));
+
+  if (isPublicPath) {
+    return NextResponse.next({ request });
+  }
+
   let supabaseResponse = NextResponse.next({
     request,
   });
@@ -29,17 +39,12 @@ export async function updateSession(request: NextRequest) {
     }
   );
 
+  // Use getSession() for fast local JWT check (no network round-trip)
   const {
-    data: { user },
-  } = await supabase.auth.getUser();
+    data: { session },
+  } = await supabase.auth.getSession();
 
-  // Public routes that don't require authentication
-  const publicPaths = ["/login", "/signup", "/api/auth/callback", "/api/email/webhook", "/api/email/inbound", "/proposals/p/", "/api/proposals/p/"];
-  const isPublicPath =
-    request.nextUrl.pathname === "/" ||
-    publicPaths.some((path) => request.nextUrl.pathname.startsWith(path));
-
-  if (!user && !isPublicPath) {
+  if (!session) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     return NextResponse.redirect(url);
