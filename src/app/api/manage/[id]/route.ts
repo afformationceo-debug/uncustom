@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { FUNNEL_TO_LEGACY_STATUS } from "@/types/platform";
 import type { FunnelStatus } from "@/types/platform";
 import type { Tables } from "@/types/database";
+import { syncStatusToCrm } from "@/lib/crm/register";
 
 // Boolean fields that auto-set timestamps
 const BOOLEAN_TIMESTAMP_MAP: Record<string, string> = {
@@ -153,8 +154,8 @@ export async function PATCH(
       .update(updatePayload)
       .eq("id", id)
       .select(`*,
-        influencer:influencers!inner(id, username, display_name, email, platform, follower_count, profile_image_url, profile_url, real_name, birth_date, phone),
-        campaign:campaigns!campaign_id(id, name, campaign_type)`)
+        influencer:influencers!inner(id, username, display_name, email, platform, follower_count, profile_image_url, profile_url, real_name, birth_date, phone, gender, line_id, country, crm_user_id, default_settlement_info),
+        campaign:campaigns!campaign_id(id, name, campaign_type, crm_hospital_id, crm_hospital_code)`)
       .single();
 
     if (updateError) {
@@ -172,6 +173,21 @@ export async function PATCH(
           performed_by: user?.id ?? null,
         }))
       );
+    }
+
+    // CRM sync: auto-push changes to MySQL CRM for linked records
+    if (record.crm_reservation_id) {
+      const CRM_SYNC_FIELDS = [
+        "visit_completed", "upload_url", "influencer_payment_status", "client_payment_status",
+        "guideline_sent", "notes", "crm_procedure", "interpreter_needed",
+      ] as const;
+      for (const field of CRM_SYNC_FIELDS) {
+        if (field in updatePayload) {
+          syncStatusToCrm(supabase, id, field, updatePayload[field]).catch((err) =>
+            console.error(`CRM sync ${field} failed:`, err)
+          );
+        }
+      }
     }
 
     return NextResponse.json({ data: updated });

@@ -18,7 +18,7 @@ import {
 import {
   Plus, LayoutGrid, List, Search, ArrowRight, Pencil,
   Users, Mail, Send, Upload, CheckCircle2, TrendingUp,
-  Globe, BarChart3,
+  Globe, BarChart3, Building2,
 } from "lucide-react";
 import type { Tables } from "@/types/database";
 import type { CampaignStats } from "@/app/api/campaigns/stats/route";
@@ -236,6 +236,7 @@ export default function CampaignsPage() {
                 <TableHead className="w-[80px]">발송</TableHead>
                 <TableHead className="w-[120px]">국가 분포</TableHead>
                 <TableHead className="w-[120px]">플랫폼</TableHead>
+                <TableHead className="w-[90px]">CRM</TableHead>
                 <TableHead className="w-[70px]">생성일</TableHead>
                 <TableHead className="w-[50px]"></TableHead>
               </TableRow>
@@ -353,6 +354,34 @@ export default function CampaignsPage() {
                       )}
                     </TableCell>
 
+                    {/* CRM Hospital */}
+                    <TableCell>
+                      {c.crm_hospital_id ? (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Badge
+                              variant="outline"
+                              className="text-[10px] px-1.5 py-0 gap-1 border-teal-300 text-teal-700 dark:border-teal-700 dark:text-teal-400"
+                            >
+                              <Building2 className="w-2.5 h-2.5" />
+                              #{c.crm_hospital_id}
+                            </Badge>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <div className="text-xs space-y-0.5">
+                              <p className="font-medium">CRM 병원 #{c.crm_hospital_id}</p>
+                              {c.crm_hospital_code && <p>코드: {c.crm_hospital_code}</p>}
+                              {c.address && <p>{c.address}</p>}
+                              {c.phone_number && <p>전화: {c.phone_number}</p>}
+                              {c.ceo_name && <p>대표: {c.ceo_name}</p>}
+                            </div>
+                          </TooltipContent>
+                        </Tooltip>
+                      ) : (
+                        <span className="text-[10px] text-muted-foreground">-</span>
+                      )}
+                    </TableCell>
+
                     {/* Created date */}
                     <TableCell>
                       <span className="text-[10px] text-muted-foreground">
@@ -372,6 +401,15 @@ export default function CampaignsPage() {
                             campaign_type: c.campaign_type,
                             target_countries: c.target_countries,
                             target_platforms: c.target_platforms,
+                            crm_hospital_id: c.crm_hospital_id,
+                            crm_hospital_code: c.crm_hospital_code,
+                            business_number: c.business_number,
+                            commission_rate: c.commission_rate,
+                            address: c.address,
+                            phone_number: c.phone_number,
+                            tax_invoice_email: c.tax_invoice_email,
+                            ceo_name: c.ceo_name,
+                            operating_hours: c.operating_hours,
                           }}
                           trigger={
                             <Button variant="ghost" size="icon" className="h-6 w-6">
@@ -437,20 +475,24 @@ export default function CampaignsPage() {
                       </div>
                     </div>
 
-                    {/* Platform + Country */}
-                    {(platforms.length > 0 || countries.length > 0) && (
-                      <div className="flex flex-wrap gap-1">
-                        {platforms.map((p) => (
-                          <Badge key={p} variant="outline" className="text-[10px] px-1 py-0 gap-0.5">
-                            <span className={`w-1.5 h-1.5 rounded-full ${PLATFORM_DOT[p] ?? "bg-muted"}`} />
-                            {PLATFORM_LABELS[p] ?? p}
-                          </Badge>
-                        ))}
-                        {countries.map((code) => (
-                          <span key={code} className="text-xs" title={code}>{COUNTRY_FLAGS[code] ?? code}</span>
-                        ))}
-                      </div>
-                    )}
+                    {/* CRM Hospital Badge + Platform + Country */}
+                    <div className="flex flex-wrap gap-1">
+                      {campaign.crm_hospital_id && (
+                        <Badge variant="outline" className="text-[10px] px-1 py-0 gap-0.5 border-teal-300 text-teal-700 dark:border-teal-700 dark:text-teal-400">
+                          <Building2 className="w-2.5 h-2.5" />
+                          CRM
+                        </Badge>
+                      )}
+                      {platforms.map((p) => (
+                        <Badge key={p} variant="outline" className="text-[10px] px-1 py-0 gap-0.5">
+                          <span className={`w-1.5 h-1.5 rounded-full ${PLATFORM_DOT[p] ?? "bg-muted"}`} />
+                          {PLATFORM_LABELS[p] ?? p}
+                        </Badge>
+                      ))}
+                      {countries.map((code) => (
+                        <span key={code} className="text-xs" title={code}>{COUNTRY_FLAGS[code] ?? code}</span>
+                      ))}
+                    </div>
 
                     {/* Stats Grid */}
                     {total > 0 && s ? (

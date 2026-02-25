@@ -5,6 +5,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
+import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
 import { CreditCard } from "lucide-react";
@@ -15,6 +18,8 @@ interface SettlementInfo {
   bank_name?: string;
   account_number?: string;
   account_holder?: string;
+  swift_code?: string;
+  method?: string;
 }
 
 interface InlineSettlementEditorProps {
@@ -35,7 +40,7 @@ export function InlineSettlementEditor({ value, onSave }: InlineSettlementEditor
   }
 
   function handleSave() {
-    const hasAny = form.paypal_email || form.bank_name || form.account_number || form.account_holder;
+    const hasAny = form.paypal_email || form.bank_name || form.account_number || form.account_holder || form.swift_code;
     onSave(hasAny ? form : null);
     setOpen(false);
   }
@@ -61,6 +66,20 @@ export function InlineSettlementEditor({ value, onSave }: InlineSettlementEditor
             <DialogTitle>정산 정보</DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
+            {/* Payment method selector */}
+            <div>
+              <Label className="text-xs">정산 방법</Label>
+              <Select value={form.method ?? "paypal"} onValueChange={(v) => setForm({ ...form, method: v })}>
+                <SelectTrigger className="h-8 text-sm">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="paypal">PayPal</SelectItem>
+                  <SelectItem value="bank_transfer">계좌이체</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
             <div>
               <Label className="text-xs">PayPal 이메일</Label>
               <Input
@@ -94,6 +113,15 @@ export function InlineSettlementEditor({ value, onSave }: InlineSettlementEditor
               <Input
                 value={form.account_holder ?? ""}
                 onChange={(e) => setForm({ ...form, account_holder: e.target.value })}
+                className="h-8 text-sm"
+              />
+            </div>
+            <div>
+              <Label className="text-xs">SWIFT 코드</Label>
+              <Input
+                value={form.swift_code ?? ""}
+                onChange={(e) => setForm({ ...form, swift_code: e.target.value })}
+                placeholder="해외송금 SWIFT 코드"
                 className="h-8 text-sm"
               />
             </div>

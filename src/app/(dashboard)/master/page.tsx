@@ -154,6 +154,16 @@ const COLUMN_SORT_MAP: Record<string, string> = {
   is_monetized: "is_monetized",
   keywords: "created_at",
   created_at: "created_at",
+  crm_user_id: "crm_user_id",
+  gender: "gender",
+  line_id: "line_id",
+  default_settlement_info: "created_at",
+  influence_score: "influence_score",
+  content_quality_score: "content_quality_score",
+  audience_authenticity_score: "audience_authenticity_score",
+  brand_collab_count: "brand_collab_count",
+  last_content_at: "last_content_at",
+  commerce_enabled: "commerce_enabled",
 };
 
 /** Escape LIKE/ILIKE wildcard characters */
@@ -196,6 +206,11 @@ const SORT_OPTIONS: { value: SortField; label: string }[] = [
   { value: "engagement_rate", label: "참여율" },
   { value: "avg_likes", label: "평균좋아요" },
   { value: "avg_views", label: "평균조회" },
+  { value: "influence_score", label: "영향력 점수" },
+  { value: "content_quality_score", label: "콘텐츠 품질" },
+  { value: "audience_authenticity_score", label: "진성 오디언스" },
+  { value: "brand_collab_count", label: "브랜드 협업" },
+  { value: "last_content_at", label: "최근 콘텐츠" },
 ];
 
 // Platform-specific column definitions
@@ -303,7 +318,115 @@ function getCommonTailColumns(): ColumnDef[] {
     },
   };
 
-  return [keywordsCol, dateCol];
+  // CRM columns — show only when data exists
+  const crmIdCol: ColumnDef = {
+    key: "crm_user_id",
+    label: "CRM",
+    render: (inf) => {
+      if (!inf.crm_user_id) return <span className="text-muted-foreground text-xs">-</span>;
+      return (
+        <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-teal-300 text-teal-700 dark:border-teal-700 dark:text-teal-400">
+          #{inf.crm_user_id}
+        </Badge>
+      );
+    },
+  };
+
+  const genderCol: ColumnDef = {
+    key: "gender",
+    label: "성별",
+    render: (inf) => {
+      if (!inf.gender) return <span className="text-muted-foreground text-xs">-</span>;
+      const labels: Record<string, string> = { M: "남", F: "여", other: "기타" };
+      return <span className="text-xs">{labels[inf.gender] ?? inf.gender}</span>;
+    },
+  };
+
+  const lineIdCol: ColumnDef = {
+    key: "line_id",
+    label: "LINE",
+    render: (inf) => {
+      if (!inf.line_id) return <span className="text-muted-foreground text-xs">-</span>;
+      return <span className="text-xs truncate max-w-[80px] block">{inf.line_id}</span>;
+    },
+  };
+
+  const settlementCol: ColumnDef = {
+    key: "default_settlement_info",
+    label: "정산정보",
+    render: (inf) => {
+      const info = inf.default_settlement_info as { paypal_email?: string; bank_name?: string; method?: string } | null;
+      if (!info) return <span className="text-muted-foreground text-xs">-</span>;
+      if (info.paypal_email) return <span className="text-[10px] text-orange-600 dark:text-orange-400">PayPal</span>;
+      if (info.bank_name) return <span className="text-[10px] text-blue-600 dark:text-blue-400">{info.bank_name}</span>;
+      return <span className="text-muted-foreground text-xs">-</span>;
+    },
+  };
+
+  const influenceScoreCol: ColumnDef = {
+    key: "influence_score",
+    label: "영향력",
+    render: (inf) => {
+      const score = (inf as Record<string, unknown>).influence_score as number | null;
+      if (score == null) return <span className="text-muted-foreground text-xs">-</span>;
+      const color = score >= 70 ? "text-green-600 dark:text-green-400" : score >= 40 ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground";
+      return <span className={`text-xs font-medium tabular-nums ${color}`}>{score.toFixed(0)}</span>;
+    },
+  };
+
+  const contentQualityCol: ColumnDef = {
+    key: "content_quality_score",
+    label: "콘텐츠품질",
+    render: (inf) => {
+      const score = (inf as Record<string, unknown>).content_quality_score as number | null;
+      if (score == null) return <span className="text-muted-foreground text-xs">-</span>;
+      const color = score >= 70 ? "text-green-600 dark:text-green-400" : score >= 40 ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground";
+      return <span className={`text-xs font-medium tabular-nums ${color}`}>{score.toFixed(0)}</span>;
+    },
+  };
+
+  const brandCollabCol: ColumnDef = {
+    key: "brand_collab_count",
+    label: "브랜드협업",
+    render: (inf) => {
+      const count = (inf as Record<string, unknown>).brand_collab_count as number | null;
+      if (!count) return <span className="text-muted-foreground text-xs">-</span>;
+      return <span className="text-xs tabular-nums">{count}</span>;
+    },
+  };
+
+  const commerceCol: ColumnDef = {
+    key: "commerce_enabled",
+    label: "이커머스",
+    render: (inf) => {
+      const enabled = (inf as Record<string, unknown>).commerce_enabled as boolean | null;
+      if (!enabled) return <span className="text-muted-foreground text-xs">-</span>;
+      return <Badge variant="secondary" className="text-[10px] px-1.5 py-0">활성</Badge>;
+    },
+  };
+
+  const audienceAuthCol: ColumnDef = {
+    key: "audience_authenticity_score",
+    label: "진성오디언스",
+    render: (inf) => {
+      const score = (inf as Record<string, unknown>).audience_authenticity_score as number | null;
+      if (score == null) return <span className="text-muted-foreground text-xs">-</span>;
+      const color = score >= 70 ? "text-green-600" : score >= 40 ? "text-amber-600" : "text-red-500";
+      return <span className={`text-xs font-medium tabular-nums ${color}`}>{score.toFixed(1)}</span>;
+    },
+  };
+
+  const lastContentCol: ColumnDef = {
+    key: "last_content_at",
+    label: "최근콘텐츠",
+    render: (inf) => {
+      const dt = (inf as Record<string, unknown>).last_content_at as string | null;
+      if (!dt) return <span className="text-muted-foreground text-xs">-</span>;
+      return <span className="text-xs tabular-nums">{new Date(dt).toLocaleDateString("ko-KR", { month: "short", day: "numeric" })}</span>;
+    },
+  };
+
+  return [keywordsCol, influenceScoreCol, contentQualityCol, audienceAuthCol, brandCollabCol, commerceCol, lastContentCol, crmIdCol, genderCol, lineIdCol, settlementCol, dateCol];
 }
 
 // ---------------------------------------------------------------------------
@@ -942,51 +1065,12 @@ function getColumnsForPlatform(platform: PlatformFilter): ColumnDef[] {
           return <span className={`text-[10px] px-1.5 py-0.5 rounded ${badge.className}`}>{badge.label}</span>;
         },
       },
-      {
-        key: "is_verified",
-        label: "인증",
-        render: (inf) => inf.is_verified ? (
-          <CheckCircle2 className="w-4 h-4 text-blue-500" />
-        ) : (
-          <span className="text-muted-foreground text-xs">-</span>
-        ),
-      },
       colCount("avg_likes", "평균좋아요"),
       colCount("avg_comments", "평균댓글"),
       colCount("avg_shares", "평균공유"),
       colCount("avg_views", "평균재생"),
-      {
-        key: "external_url",
-        label: "바이오링크",
-        render: (inf) => {
-          if (!inf.external_url) return <span className="text-muted-foreground text-xs">-</span>;
-          let hostname = "";
-          try { hostname = new URL(inf.external_url).hostname.replace("www.", ""); } catch { hostname = (inf.external_url).slice(0, 30); }
-          return (
-            <a href={inf.external_url} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-600 hover:text-blue-800 truncate max-w-[100px] block">
-              {hostname}
-            </a>
-          );
-        },
-      },
       colCountry(),
       colLanguage(),
-      colLocation(),
-      colCount("share_count", "총공유"),
-      colContentUrl("콘텐츠URL"),
-      colContentText("콘텐츠"),
-      colContentDate("게시일"),
-      colContentLang("콘텐츠언어"),
-      colContentHashtags("해시태그"),
-      colCount("bookmark_count", "북마크"),
-      colCount("quote_count", "리포스트"),
-      colCount("favourites_count", "좋아요한수"),
-      colVideoDuration(),
-      colPrivate(),
-      colBool("is_sponsored", "광고", "Ad"),
-      colMentions(),
-      colMusicInfo(),
-      colProductType(),
       ...tail,
     ];
   }
@@ -1713,7 +1797,7 @@ export default function MasterPage() {
   }
 
   // Select all columns EXCEPT raw_data (which is large JSONB) for performance
-  const INFLUENCER_SELECT = "id,platform,platform_id,username,display_name,profile_url,profile_image_url,email,email_source,bio,follower_count,following_count,post_count,engagement_rate,country,language,extracted_keywords,extracted_from_tags,is_verified,is_business,category,import_source,is_blue_verified,verified_type,location,heart_count,share_count,total_views,channel_joined_date,is_monetized,external_url,avg_likes,avg_comments,avg_views,avg_shares,source_content_url,source_content_text,source_content_media,source_content_created_at,content_language,content_hashtags,account_created_at,is_private,cover_image_url,bookmark_count,quote_count,favourites_count,video_duration,video_title,listed_count,media_count,is_sponsored,is_retweet,is_reply,mentions,music_info,product_type,last_updated_at,created_at";
+  const INFLUENCER_SELECT = "id,platform,platform_id,username,display_name,profile_url,profile_image_url,email,email_source,bio,follower_count,following_count,post_count,engagement_rate,country,language,extracted_keywords,extracted_from_tags,is_verified,is_business,category,import_source,is_blue_verified,verified_type,location,heart_count,share_count,total_views,channel_joined_date,is_monetized,external_url,avg_likes,avg_comments,avg_views,avg_shares,source_content_url,source_content_text,source_content_media,source_content_created_at,content_language,content_hashtags,account_created_at,is_private,cover_image_url,bookmark_count,quote_count,favourites_count,video_duration,video_title,listed_count,media_count,is_sponsored,is_retweet,is_reply,mentions,music_info,product_type,last_updated_at,created_at,crm_user_id,gender,line_id,default_settlement_info,real_name,birth_date,phone";
 
   async function fetchInfluencers() {
     setLoading(true);

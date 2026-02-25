@@ -7,6 +7,9 @@ const ALLOWED_FIELDS = new Set([
   "phone",
   "email",
   "display_name",
+  "gender",
+  "line_id",
+  "country",
 ]);
 
 /**

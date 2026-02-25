@@ -17,6 +17,12 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
 
@@ -52,6 +58,11 @@ const CAMPAIGN_TYPE_OPTIONS = [
   { value: "shipping", label: "배송형", desc: "제품을 인플루언서에게 배송" },
 ] as const;
 
+interface SnsAccountEntry {
+  platform: string;
+  username: string;
+}
+
 interface CampaignFormProps {
   teamId: string;
   trigger?: React.ReactNode;
@@ -62,6 +73,17 @@ interface CampaignFormProps {
     campaign_type?: string;
     target_countries?: string[];
     target_platforms?: string[];
+    sns_accounts?: SnsAccountEntry[];
+    // CRM fields
+    crm_hospital_id?: number | null;
+    crm_hospital_code?: string | null;
+    business_number?: string | null;
+    commission_rate?: number | null;
+    address?: string | null;
+    phone_number?: string | null;
+    tax_invoice_email?: string | null;
+    ceo_name?: string | null;
+    operating_hours?: string | null;
   };
 }
 
@@ -76,6 +98,41 @@ export function CampaignForm({ teamId, trigger, campaign }: CampaignFormProps) {
   const [campaignType, setCampaignType] = useState(campaign?.campaign_type ?? "visit");
   const [targetCountries, setTargetCountries] = useState<string[]>(campaign?.target_countries ?? []);
   const [targetPlatforms, setTargetPlatforms] = useState<string[]>(campaign?.target_platforms ?? []);
+
+  // SNS accounts for campaign analysis
+  const [snsAccounts, setSnsAccounts] = useState<SnsAccountEntry[]>(
+    campaign?.sns_accounts ?? []
+  );
+
+  function updateSnsAccount(platform: string, username: string) {
+    setSnsAccounts((prev) => {
+      const existing = prev.findIndex((a) => a.platform === platform);
+      if (existing >= 0) {
+        const updated = [...prev];
+        updated[existing] = { platform, username };
+        return updated;
+      }
+      if (username.trim()) {
+        return [...prev, { platform, username: username.trim() }];
+      }
+      return prev;
+    });
+  }
+
+  function getSnsUsername(platform: string): string {
+    return snsAccounts.find((a) => a.platform === platform)?.username ?? "";
+  }
+
+  // CRM hospital fields
+  const [crmHospitalId, setCrmHospitalId] = useState<string>(campaign?.crm_hospital_id?.toString() ?? "");
+  const [crmHospitalCode, setCrmHospitalCode] = useState(campaign?.crm_hospital_code ?? "");
+  const [businessNumber, setBusinessNumber] = useState(campaign?.business_number ?? "");
+  const [commissionRate, setCommissionRate] = useState(campaign?.commission_rate?.toString() ?? "");
+  const [crmAddress, setCrmAddress] = useState(campaign?.address ?? "");
+  const [crmPhone, setCrmPhone] = useState(campaign?.phone_number ?? "");
+  const [taxEmail, setTaxEmail] = useState(campaign?.tax_invoice_email ?? "");
+  const [ceoName, setCeoName] = useState(campaign?.ceo_name ?? "");
+  const [operatingHours, setOperatingHours] = useState(campaign?.operating_hours ?? "");
 
   const isEditing = !!campaign;
 
@@ -96,6 +153,25 @@ export function CampaignForm({ teamId, trigger, campaign }: CampaignFormProps) {
     if (!name.trim()) return;
     setLoading(true);
     try {
+      // Build CRM fields
+      const crmFields = {
+        crm_hospital_id: crmHospitalId ? parseInt(crmHospitalId) : null,
+        crm_hospital_code: crmHospitalCode.trim() || null,
+        business_number: businessNumber.trim() || null,
+        commission_rate: commissionRate ? parseFloat(commissionRate) : null,
+        address: crmAddress.trim() || null,
+        phone_number: crmPhone.trim() || null,
+        tax_invoice_email: taxEmail.trim() || null,
+        ceo_name: ceoName.trim() || null,
+        operating_hours: operatingHours.trim() || null,
+      };
+
+      const filteredSns = snsAccounts
+        .filter((a) => a.username.trim())
+        .map((a) => ({ platform: a.platform, username: a.username } as Record<string, string>));
+
+      let campaignId: string | null = null;
+
       if (isEditing) {
         const { error } = await supabase
           .from("campaigns")
@@ -105,21 +181,38 @@ export function CampaignForm({ teamId, trigger, campaign }: CampaignFormProps) {
             campaign_type: campaignType,
             target_countries: targetCountries,
             target_platforms: targetPlatforms,
+            sns_accounts: filteredSns,
+            ...crmFields,
             updated_at: new Date().toISOString(),
           })
           .eq("id", campaign.id);
         if (error) throw error;
+        campaignId = campaign.id;
       } else {
-        const { error } = await supabase.from("campaigns").insert({
+        const { data: newCampaign, error } = await supabase.from("campaigns").insert({
           team_id: teamId,
           name: name.trim(),
           description: description.trim() || null,
           campaign_type: campaignType,
           target_countries: targetCountries,
           target_platforms: targetPlatforms,
-        });
+          sns_accounts: filteredSns,
+          ...crmFields,
+        }).select("id").single();
         if (error) throw error;
+        campaignId = newCampaign?.id ?? null;
       }
+
+      // Auto-register SNS accounts as brand_accounts if any accounts were set
+      if (campaignId && filteredSns.length > 0) {
+        try {
+          await fetch(`/api/campaigns/${campaignId}/analyze-accounts`, { method: "POST" });
+          toast.success("SNS 계정이 브랜드 인텔리전스에 자동 등록되었습니다");
+        } catch {
+          // Non-blocking: account registration is not critical for campaign save
+        }
+      }
+
       setOpen(false);
       setName("");
       setDescription("");
@@ -261,6 +354,139 @@ export function CampaignForm({ teamId, trigger, campaign }: CampaignFormProps) {
                 </div>
               )}
             </div>
+            {/* Campaign SNS Accounts */}
+            <Accordion type="single" collapsible className="w-full">
+              <AccordionItem value="sns" className="border rounded-lg px-3">
+                <AccordionTrigger className="text-sm font-medium py-2">
+                  캠페인 SNS 계정 (선택)
+                </AccordionTrigger>
+                <AccordionContent className="space-y-3 pb-3">
+                  <p className="text-xs text-muted-foreground">
+                    캠페인(거래처) SNS 계정을 등록하면 자동 분석이 가능합니다
+                  </p>
+                  {TARGET_PLATFORMS.map((p) => (
+                    <div key={p.value} className="flex items-center gap-2">
+                      <div className="flex items-center gap-1.5 w-24 shrink-0">
+                        <div className={`w-2 h-2 rounded-full ${p.dot}`} />
+                        <span className="text-xs font-medium">{p.label}</span>
+                      </div>
+                      <Input
+                        placeholder={`@${p.value === "youtube" ? "channel_name" : "username"}`}
+                        value={getSnsUsername(p.value)}
+                        onChange={(e) => updateSnsAccount(p.value, e.target.value.replace(/^@/, ""))}
+                        className="h-8 text-xs flex-1"
+                      />
+                    </div>
+                  ))}
+                </AccordionContent>
+              </AccordionItem>
+            </Accordion>
+
+            {/* CRM Hospital Info (Collapsible) */}
+            {campaignType === "visit" && (
+              <Accordion type="single" collapsible className="w-full">
+                <AccordionItem value="crm" className="border rounded-lg px-3">
+                  <AccordionTrigger className="text-sm font-medium py-2">
+                    CRM 병원 연동 (선택)
+                  </AccordionTrigger>
+                  <AccordionContent className="space-y-3 pb-3">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="grid gap-1">
+                        <Label className="text-xs">CRM 병원 ID</Label>
+                        <Input
+                          type="number"
+                          placeholder="MySQL ID"
+                          value={crmHospitalId}
+                          onChange={(e) => setCrmHospitalId(e.target.value)}
+                          className="h-8 text-xs"
+                        />
+                      </div>
+                      <div className="grid gap-1">
+                        <Label className="text-xs">병원 코드</Label>
+                        <Input
+                          placeholder="hospital_code"
+                          value={crmHospitalCode}
+                          onChange={(e) => setCrmHospitalCode(e.target.value)}
+                          className="h-8 text-xs"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="grid gap-1">
+                        <Label className="text-xs">대표자명</Label>
+                        <Input
+                          placeholder="홍길동"
+                          value={ceoName}
+                          onChange={(e) => setCeoName(e.target.value)}
+                          className="h-8 text-xs"
+                        />
+                      </div>
+                      <div className="grid gap-1">
+                        <Label className="text-xs">사업자번호</Label>
+                        <Input
+                          placeholder="000-00-00000"
+                          value={businessNumber}
+                          onChange={(e) => setBusinessNumber(e.target.value)}
+                          className="h-8 text-xs"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="grid gap-1">
+                        <Label className="text-xs">수수료율</Label>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          placeholder="0.15"
+                          value={commissionRate}
+                          onChange={(e) => setCommissionRate(e.target.value)}
+                          className="h-8 text-xs"
+                        />
+                      </div>
+                      <div className="grid gap-1">
+                        <Label className="text-xs">전화번호</Label>
+                        <Input
+                          placeholder="02-000-0000"
+                          value={crmPhone}
+                          onChange={(e) => setCrmPhone(e.target.value)}
+                          className="h-8 text-xs"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid gap-1">
+                      <Label className="text-xs">주소</Label>
+                      <Input
+                        placeholder="서울시 강남구..."
+                        value={crmAddress}
+                        onChange={(e) => setCrmAddress(e.target.value)}
+                        className="h-8 text-xs"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="grid gap-1">
+                        <Label className="text-xs">세금계산서 이메일</Label>
+                        <Input
+                          type="email"
+                          placeholder="tax@hospital.com"
+                          value={taxEmail}
+                          onChange={(e) => setTaxEmail(e.target.value)}
+                          className="h-8 text-xs"
+                        />
+                      </div>
+                      <div className="grid gap-1">
+                        <Label className="text-xs">운영시간</Label>
+                        <Input
+                          placeholder="09:00-18:00"
+                          value={operatingHours}
+                          onChange={(e) => setOperatingHours(e.target.value)}
+                          className="h-8 text-xs"
+                        />
+                      </div>
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+              </Accordion>
+            )}
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>

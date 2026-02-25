@@ -10,10 +10,8 @@ import {
   Database,
   LogOut,
   Search,
-  Tag,
   Download,
   FileText,
-  Mail,
   Send,
   ClipboardList,
   Inbox,
@@ -23,6 +21,10 @@ import {
   BarChart3,
   Building2,
   MessageSquareText,
+  ArrowLeftRight,
+  Target,
+  Film,
+  ShoppingBag,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import type { Tables } from "@/types/database";
@@ -33,9 +35,14 @@ const mainNavigation = [
   { name: "마스터데이터", href: "/master", icon: Database },
 ];
 
+const brandIntelligenceNav = [
+  { name: "타겟 브랜드", href: "/brands", icon: Target },
+  { name: "콘텐츠 분석", href: "/content-analysis", icon: Film },
+  { name: "이커머스", href: "/commerce", icon: ShoppingBag },
+];
+
 const extractionNav = [
   { name: "키워드", href: "/extract/keywords", icon: Search },
-  { name: "태그됨", href: "/extract/tagged", icon: Tag },
   { name: "추출 실행", href: "/extract/run", icon: Download },
 ];
 
@@ -60,17 +67,23 @@ const managementNav = [
   { name: "성과", href: "/metrics", icon: BarChart3 },
 ];
 
+const crmNav = [
+  { name: "CRM 연동", href: "/crm", icon: ArrowLeftRight },
+];
+
 type NavSection = {
   title: string;
   items: { name: string; href: string; icon: React.ComponentType<{ className?: string }> }[];
 };
 
 const sections: NavSection[] = [
+  { title: "브랜드 인텔리전스", items: brandIntelligenceNav },
   { title: "인플루언서 추출", items: extractionNav },
   { title: "제안서 & 템플릿", items: proposalTemplateNav },
   { title: "이메일", items: emailNav },
   { title: "소통", items: communicationNav },
   { title: "관리", items: managementNav },
+  { title: "CRM", items: crmNav },
 ];
 
 export function Sidebar() {

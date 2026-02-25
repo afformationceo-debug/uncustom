@@ -16,6 +16,7 @@ import {
 import { InlineCurrencyInput } from "./inline-currency-input";
 import { InlineSettlementEditor } from "./inline-settlement-editor";
 import { InlineInfluencerInfoEditor } from "./inline-influencer-info-editor";
+import { CrmRegistrationCell } from "./crm-register-dialog";
 import { Mail, Users, ExternalLink, StickyNote, BarChart3 } from "lucide-react";
 import type { Tables, Json } from "@/types/database";
 
@@ -284,6 +285,11 @@ export const ALL_COLUMNS: ColumnDef[] = [
           birthDate={inf.birth_date ?? null}
           phone={inf.phone ?? null}
           displayName={inf.display_name ?? null}
+          gender={inf.gender ?? null}
+          lineId={inf.line_id ?? null}
+          country={inf.country ?? null}
+          email={inf.email ?? null}
+          crmUserId={inf.crm_user_id ?? null}
         />
       );
     },
@@ -478,11 +484,7 @@ export const ALL_COLUMNS: ColumnDef[] = [
     label: "CRM등록",
     group: "prepare",
     render: (item, onUpdate) => (
-      <Switch
-        checked={item.crm_registered}
-        onCheckedChange={(v) => onUpdate(item.id, "crm_registered", v)}
-        className="scale-75"
-      />
+      <CrmRegistrationCell item={item} onUpdate={onUpdate} />
     ),
   },
   {
@@ -496,6 +498,46 @@ export const ALL_COLUMNS: ColumnDef[] = [
         onSave={(v) => onUpdate(item.id, "crm_note", v)}
         className="w-28"
       />
+    ),
+  },
+  {
+    key: "crm_procedure",
+    label: "시술명",
+    group: "prepare",
+    render: (item, onUpdate) => (
+      <InlineText
+        value={item.crm_procedure}
+        placeholder="시술명"
+        onSave={(v) => onUpdate(item.id, "crm_procedure", v)}
+        className="w-28"
+      />
+    ),
+  },
+  {
+    key: "crm_requested_procedure",
+    label: "요청시술",
+    group: "prepare",
+    render: (item, onUpdate) => (
+      <InlineText
+        value={item.crm_requested_procedure}
+        placeholder="요청 시술"
+        onSave={(v) => onUpdate(item.id, "crm_requested_procedure", v)}
+        className="w-28"
+      />
+    ),
+  },
+  {
+    key: "crm_reservation_id",
+    label: "CRM예약#",
+    group: "prepare",
+    render: (item) => (
+      item.crm_reservation_id ? (
+        <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-emerald-300 text-emerald-700 dark:border-emerald-700 dark:text-emerald-400">
+          #{item.crm_reservation_id}
+        </Badge>
+      ) : (
+        <span className="text-[10px] text-muted-foreground">-</span>
+      )
     ),
   },
 
@@ -705,6 +747,26 @@ export const ALL_COLUMNS: ColumnDef[] = [
         onSave={(v) => onUpdate(item.id, "settlement_info", v)}
       />
     ),
+  },
+  {
+    key: "influencer_paid_amount",
+    label: "인플실지급",
+    group: "settlement",
+    render: (item) => {
+      const amount = (item as Record<string, unknown>).influencer_paid_amount as number | null;
+      if (amount == null) return <span className="text-muted-foreground text-xs">-</span>;
+      return <span className="text-xs tabular-nums">{amount.toLocaleString()}</span>;
+    },
+  },
+  {
+    key: "client_paid_amount",
+    label: "거래처실입금",
+    group: "settlement",
+    render: (item) => {
+      const amount = (item as Record<string, unknown>).client_paid_amount as number | null;
+      if (amount == null) return <span className="text-muted-foreground text-xs">-</span>;
+      return <span className="text-xs tabular-nums">{amount.toLocaleString()}</span>;
+    },
   },
   {
     key: "influencer_payment_status",

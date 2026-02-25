@@ -169,7 +169,7 @@ export function getDefaultInput(
       };
     case APIFY_ACTORS.INSTAGRAM_TAGGED:
       return {
-        usernames: [username],
+        username: [username],
         resultsLimit: limit,
         ...extra,
       };

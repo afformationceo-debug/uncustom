@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getRunStatus, getDatasetItems, getDatasetInfo, startActor } from "@/lib/apify/client";
 import { transformApifyItem } from "@/lib/apify/transform";
+import { transformBrandProfile, transformToContent } from "@/lib/apify/transform-brand";
 import { extractLinksFromBio, isEmailExtractableLink } from "@/lib/utils/email-extractor";
 import { APIFY_ACTORS } from "@/lib/apify/actors";
 import type { Json, Tables } from "@/types/database";
@@ -72,7 +73,13 @@ export async function GET(request: Request) {
         return handleEmailScrapeResults(supabase, job, items, jobId);
       }
 
-      // (email_social type removed — now uses email_scrape with EMAIL_EXTRACTOR)
+      // Route to brand pipeline handlers
+      if (job.type === "brand_profile") {
+        return handleBrandProfileResults(supabase, job, items, jobId);
+      }
+      if (job.type === "brand_tagged_content") {
+        return handleBrandTaggedContentResults(supabase, job, items, jobId);
+      }
 
       // Regular extraction handling (keyword/tagged)
       return handleExtractionResults(supabase, job, items, jobId);
@@ -772,6 +779,559 @@ async function enrichInfluencer(
       }
       console.log(`[enrichInfluencer] ${transformed.username}: stored ${extractableLinks.length}/${bioLinks.length} extractable bio links`);
     }
+  }
+}
+
+// ============================================================
+// Brand Pipeline Handlers
+// ============================================================
+
+/**
+ * Handle brand_profile results: Update brand_accounts with profile data from Apify
+ */
+async function handleBrandProfileResults(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  job: ExtractionJob,
+  items: Record<string, unknown>[],
+  jobId: string,
+) {
+  const inputConfig = (job.input_config ?? {}) as Record<string, unknown>;
+  const brandAccountId = inputConfig.brand_account_id as string;
+
+  if (!brandAccountId) {
+    await supabase
+      .from("extraction_jobs")
+      .update({ status: "failed", completed_at: new Date().toISOString() })
+      .eq("id", jobId);
+    return NextResponse.json({ status: "failed", error: "brand_account_id missing in input_config" });
+  }
+
+  // Log raw Apify data for debugging
+  const rawItem = items[0] as Record<string, unknown>;
+  console.log(`[brand_profile] Raw Apify keys: ${Object.keys(rawItem).join(", ")}`);
+  console.log(`[brand_profile] followersCount=${rawItem.followersCount}, followsCount=${rawItem.followsCount}, postsCount=${rawItem.postsCount}, fullName=${rawItem.fullName}`);
+
+  // Transform profile data
+  const profileUpdate = transformBrandProfile(items, job.platform);
+
+  if (!profileUpdate) {
+    await supabase
+      .from("extraction_jobs")
+      .update({ status: "completed", total_extracted: 0, completed_at: new Date().toISOString() })
+      .eq("id", jobId);
+    return NextResponse.json({ status: "completed", total_extracted: 0, message: "No profile data found" });
+  }
+
+  console.log(`[brand_profile] Transformed: followers=${profileUpdate.follower_count}, engagement=${profileUpdate.engagement_rate}, avgLikes=${profileUpdate.avg_likes}, posts=${profileUpdate.post_count}`);
+
+  // Build update object with ALL profile data
+  const updateObj: Record<string, unknown> = {
+    display_name: profileUpdate.display_name,
+    profile_url: profileUpdate.profile_url,
+    profile_image_url: profileUpdate.profile_image_url,
+    top_hashtags: profileUpdate.top_hashtags,
+    primary_content_types: profileUpdate.primary_content_types,
+    content_style: profileUpdate.content_style,
+    is_verified: profileUpdate.is_verified,
+    is_business_account: profileUpdate.is_business_account,
+    last_analyzed_at: new Date().toISOString(),
+    raw_profile_data: rawItem as unknown as Json,
+  };
+  // Only update metric fields that have actual values
+  if (profileUpdate.follower_count != null) updateObj.follower_count = profileUpdate.follower_count;
+  if (profileUpdate.following_count != null) updateObj.following_count = profileUpdate.following_count;
+  if (profileUpdate.engagement_rate != null) updateObj.engagement_rate = profileUpdate.engagement_rate;
+  if (profileUpdate.avg_likes != null) updateObj.avg_likes = profileUpdate.avg_likes;
+  if (profileUpdate.avg_comments != null) updateObj.avg_comments = profileUpdate.avg_comments;
+  if (profileUpdate.avg_views != null) updateObj.avg_views = profileUpdate.avg_views;
+  if (profileUpdate.avg_shares != null) updateObj.avg_shares = profileUpdate.avg_shares;
+  if (profileUpdate.avg_saves != null) updateObj.avg_saves = profileUpdate.avg_saves;
+  if (profileUpdate.post_count != null) updateObj.post_count = profileUpdate.post_count;
+  if (profileUpdate.posting_frequency != null) updateObj.posting_frequency = profileUpdate.posting_frequency;
+  if (profileUpdate.biography != null) updateObj.biography = profileUpdate.biography;
+  if (profileUpdate.external_url != null) updateObj.external_url = profileUpdate.external_url;
+  if (profileUpdate.business_category != null) updateObj.business_category = profileUpdate.business_category;
+
+  // Update brand_accounts with profile metrics
+  const { error: updateError } = await supabase
+    .from("brand_accounts")
+    .update(updateObj)
+    .eq("id", brandAccountId);
+
+  if (updateError) {
+    console.error(`[brand_profile] Update error: ${updateError.message}`);
+  }
+
+  // Create analysis snapshot
+  const item0 = items[0] as Record<string, unknown>;
+  const latestPosts = (item0.latestPosts as Record<string, unknown>[]) || [];
+  const contentTypeBreakdown: Record<string, number> = {};
+  for (const p of latestPosts) {
+    const t = (p.type as string) || "post";
+    contentTypeBreakdown[t] = (contentTypeBreakdown[t] || 0) + 1;
+  }
+
+  await supabase.from("brand_account_analysis").insert({
+    brand_account_id: brandAccountId,
+    analysis_period_start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
+    analysis_period_end: new Date().toISOString(),
+    follower_count_start: profileUpdate.follower_count,
+    follower_count_end: profileUpdate.follower_count,
+    follower_growth_rate: 0,
+    avg_engagement_rate: profileUpdate.engagement_rate,
+    avg_likes: profileUpdate.avg_likes,
+    avg_comments: profileUpdate.avg_comments,
+    avg_views: profileUpdate.avg_views,
+    content_type_breakdown: contentTypeBreakdown as unknown as Json,
+    hashtags_used: profileUpdate.top_hashtags.reduce((acc, tag, idx) => {
+      acc[tag] = profileUpdate.top_hashtags.length - idx;
+      return acc;
+    }, {} as Record<string, number>) as unknown as Json,
+    extraction_job_id: jobId,
+  });
+
+  // Update job status with raw data summary
+  await supabase
+    .from("extraction_jobs")
+    .update({
+      status: "completed",
+      total_extracted: 1,
+      new_extracted: 1,
+      completed_at: new Date().toISOString(),
+      result_summary: {
+        follower_count: profileUpdate.follower_count,
+        engagement_rate: profileUpdate.engagement_rate,
+        avg_likes: profileUpdate.avg_likes,
+        avg_comments: profileUpdate.avg_comments,
+        avg_views: profileUpdate.avg_views,
+        post_count: profileUpdate.post_count,
+        top_hashtags_count: profileUpdate.top_hashtags.length,
+        content_types: profileUpdate.primary_content_types,
+        posting_frequency: profileUpdate.posting_frequency,
+        raw_keys: Object.keys(rawItem),
+      } as unknown as Json,
+    })
+    .eq("id", jobId);
+
+  // Auto-trigger content discovery after profile analysis
+  let discoverJobId: string | null = null;
+  try {
+    discoverJobId = await autoTriggerBrandContentDiscovery(supabase, brandAccountId, job.platform);
+  } catch (err) {
+    console.error("[brand_profile] Auto content discovery error:", err);
+  }
+
+  console.log(`[brand_profile] Updated brand ${brandAccountId}: followers=${profileUpdate.follower_count}, engagement=${profileUpdate.engagement_rate}%`);
+
+  return NextResponse.json({
+    status: "completed",
+    total_extracted: 1,
+    type: "brand_profile",
+    discover_job_id: discoverJobId,
+    profile_summary: {
+      follower_count: profileUpdate.follower_count,
+      engagement_rate: profileUpdate.engagement_rate,
+      post_count: profileUpdate.post_count,
+    },
+  });
+}
+
+/**
+ * Handle brand_tagged_content results: Save tagged content + build relationships
+ */
+async function handleBrandTaggedContentResults(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  job: ExtractionJob,
+  items: Record<string, unknown>[],
+  jobId: string,
+) {
+  const inputConfig = (job.input_config ?? {}) as Record<string, unknown>;
+  const brandAccountId = inputConfig.brand_account_id as string;
+
+  if (!brandAccountId) {
+    await supabase
+      .from("extraction_jobs")
+      .update({ status: "failed", completed_at: new Date().toISOString() })
+      .eq("id", jobId);
+    return NextResponse.json({ status: "failed", error: "brand_account_id missing" });
+  }
+
+  let contentCount = 0;
+  const influencerStats = new Map<string, {
+    influencer_id: string | null;
+    username: string;
+    total: number;
+    sponsored: number;
+    organic: number;
+    totalViews: number;
+    totalLikes: number;
+    totalComments: number;
+    totalShares: number;
+    engagementRates: number[];
+    firstPosted: string | null;
+    lastPosted: string | null;
+  }>();
+
+  // Get brand info for auto-creating influencers
+  const { data: brandForTeam } = await supabase
+    .from("brand_accounts")
+    .select("team_id, username")
+    .eq("id", brandAccountId)
+    .single();
+  const teamId = brandForTeam?.team_id;
+  const brandUsername = brandForTeam?.username;
+
+  for (const item of items) {
+    const record = item as Record<string, unknown>;
+    const content = transformToContent(record, job.platform);
+
+    // Resolve influencer_id by username — auto-create if not found
+    let influencerId: string | null = null;
+    if (content.influencer_username) {
+      const { data: inf } = await supabase
+        .from("influencers")
+        .select("id")
+        .eq("platform", job.platform)
+        .ilike("username", content.influencer_username)
+        .limit(1)
+        .single();
+      if (inf) {
+        influencerId = inf.id;
+      } else {
+        // Auto-create influencer record from tagged content data
+        const ownerName = (record.ownerFullName as string) || (record.authorMeta as Record<string, unknown>)?.nickName as string || null;
+        const platformId = (record.ownerId as string)?.toString() || (record.authorMeta as Record<string, unknown>)?.id as string || null;
+        const profilePic = (record.ownerProfilePicUrl as string) || (record.authorMeta as Record<string, unknown>)?.avatar as string || null;
+        const profileUrl = job.platform === "instagram"
+          ? `https://instagram.com/${content.influencer_username}`
+          : job.platform === "tiktok"
+          ? `https://tiktok.com/@${content.influencer_username}`
+          : null;
+
+        const effectivePlatformId = platformId || `tagged_${content.influencer_username}`;
+
+        // Check if already exists by platform_id
+        const { data: existByPid } = await supabase
+          .from("influencers")
+          .select("id")
+          .eq("platform", job.platform)
+          .eq("platform_id", effectivePlatformId)
+          .limit(1)
+          .single();
+
+        if (existByPid) {
+          influencerId = existByPid.id;
+        } else {
+          const { data: newInf } = await supabase
+            .from("influencers")
+            .insert({
+              platform: job.platform,
+              username: content.influencer_username,
+              platform_id: effectivePlatformId,
+              display_name: ownerName,
+              profile_url: profileUrl,
+              profile_image_url: profilePic,
+              import_source: "brand_tagged",
+              extracted_from_tags: [brandUsername || ""],
+            })
+            .select("id")
+            .single();
+          if (newInf) influencerId = newInf.id;
+        }
+      }
+    }
+
+    // Insert content
+    const contentPlatformId = content.content_platform_id || `${Date.now()}_${contentCount}`;
+    const { error: insertErr } = await supabase
+      .from("brand_influencer_contents")
+      .upsert({
+        brand_account_id: brandAccountId,
+        influencer_id: influencerId,
+        influencer_username: content.influencer_username,
+        platform: content.platform,
+        content_url: content.content_url,
+        content_platform_id: contentPlatformId,
+        content_type: content.content_type,
+        caption: content.caption,
+        hashtags: content.hashtags,
+        mentions: content.mentions,
+        media_urls: content.media_urls,
+        thumbnail_url: content.thumbnail_url,
+        views_count: content.views_count,
+        likes_count: content.likes_count,
+        comments_count: content.comments_count,
+        shares_count: content.shares_count,
+        saves_count: content.saves_count,
+        engagement_rate: content.engagement_rate,
+        posted_at: content.posted_at,
+        is_sponsored: content.is_sponsored,
+        is_organic: content.is_organic,
+        sponsorship_indicators: content.sponsorship_indicators,
+        brand_mention_type: content.brand_mention_type,
+        discovered_via: "tagged_scraper",
+        extraction_job_id: jobId,
+      }, { onConflict: "brand_account_id,platform,content_platform_id" });
+
+    if (insertErr) {
+      console.error(`[brand_tagged_content] Content insert error: ${insertErr.message}`);
+      continue;
+    }
+    contentCount++;
+
+    // Accumulate per-influencer stats
+    const uKey = (content.influencer_username || "unknown").toLowerCase();
+    const existing = influencerStats.get(uKey);
+    if (existing) {
+      existing.total++;
+      if (content.is_sponsored) existing.sponsored++;
+      else existing.organic++;
+      existing.totalViews += content.views_count;
+      existing.totalLikes += content.likes_count;
+      existing.totalComments += content.comments_count;
+      existing.totalShares += content.shares_count;
+      if (content.engagement_rate) existing.engagementRates.push(content.engagement_rate);
+      if (content.posted_at) {
+        if (!existing.firstPosted || content.posted_at < existing.firstPosted) existing.firstPosted = content.posted_at;
+        if (!existing.lastPosted || content.posted_at > existing.lastPosted) existing.lastPosted = content.posted_at;
+      }
+      if (!existing.influencer_id && influencerId) existing.influencer_id = influencerId;
+    } else {
+      influencerStats.set(uKey, {
+        influencer_id: influencerId,
+        username: content.influencer_username || "unknown",
+        total: 1,
+        sponsored: content.is_sponsored ? 1 : 0,
+        organic: content.is_organic ? 1 : 0,
+        totalViews: content.views_count,
+        totalLikes: content.likes_count,
+        totalComments: content.comments_count,
+        totalShares: content.shares_count,
+        engagementRates: content.engagement_rate ? [content.engagement_rate] : [],
+        firstPosted: content.posted_at,
+        lastPosted: content.posted_at,
+      });
+    }
+  }
+
+  // Upsert brand_influencer_relationships
+  let relationshipCount = 0;
+  for (const [, stats] of influencerStats) {
+    if (!stats.influencer_id) continue; // Skip unknown influencers
+
+    const avgEngagement = stats.engagementRates.length > 0
+      ? Number((stats.engagementRates.reduce((a, b) => a + b, 0) / stats.engagementRates.length).toFixed(4))
+      : null;
+    const avgViews = stats.total > 0 ? Math.round(stats.totalViews / stats.total) : 0;
+    const avgLikes = stats.total > 0 ? Math.round(stats.totalLikes / stats.total) : 0;
+    const avgComments = stats.total > 0 ? Math.round(stats.totalComments / stats.total) : 0;
+    const avgShares = stats.total > 0 ? Math.round(stats.totalShares / stats.total) : 0;
+
+    // Calculate collaboration recency
+    const recencyDays = stats.lastPosted
+      ? Math.round((Date.now() - new Date(stats.lastPosted).getTime()) / (1000 * 60 * 60 * 24))
+      : null;
+
+    // Calculate avg days between collabs
+    let avgDaysBetween: number | null = null;
+    if (stats.firstPosted && stats.lastPosted && stats.total > 1) {
+      const totalDays = (new Date(stats.lastPosted).getTime() - new Date(stats.firstPosted).getTime()) / (1000 * 60 * 60 * 24);
+      avgDaysBetween = Math.round(totalDays / (stats.total - 1));
+    }
+
+    // Simple relationship strength: higher with more collabs, higher engagement, recent activity
+    const strengthScore = Math.min(100, Math.round(
+      (stats.total * 10) +
+      (avgEngagement ? avgEngagement * 500 : 0) +
+      (recencyDays != null && recencyDays < 30 ? 20 : recencyDays != null && recencyDays < 90 ? 10 : 0)
+    ));
+
+    const { error: relErr } = await supabase
+      .from("brand_influencer_relationships")
+      .upsert({
+        brand_account_id: brandAccountId,
+        influencer_id: stats.influencer_id,
+        total_collaborations: stats.total,
+        sponsored_count: stats.sponsored,
+        organic_count: stats.organic,
+        avg_views: avgViews,
+        avg_likes: avgLikes,
+        avg_comments: avgComments,
+        avg_shares: avgShares,
+        avg_engagement_rate: avgEngagement,
+        total_views: stats.totalViews,
+        first_collaboration_at: stats.firstPosted,
+        last_collaboration_at: stats.lastPosted,
+        avg_days_between_collabs: avgDaysBetween,
+        collaboration_recency_days: recencyDays,
+        relationship_strength_score: strengthScore,
+        is_active: recencyDays != null && recencyDays < 90,
+      }, { onConflict: "brand_account_id,influencer_id" });
+
+    if (relErr) {
+      console.error(`[brand_tagged_content] Relationship upsert error: ${relErr.message}`);
+    } else {
+      relationshipCount++;
+    }
+  }
+
+  // Also update content records that were inserted before influencer_id was resolved
+  for (const [, stats] of influencerStats) {
+    if (stats.influencer_id) {
+      await supabase
+        .from("brand_influencer_contents")
+        .update({ influencer_id: stats.influencer_id })
+        .eq("brand_account_id", brandAccountId)
+        .ilike("influencer_username", stats.username)
+        .is("influencer_id", null);
+    }
+  }
+
+  // Update job status
+  await supabase
+    .from("extraction_jobs")
+    .update({
+      status: "completed",
+      total_extracted: contentCount,
+      new_extracted: relationshipCount,
+      completed_at: new Date().toISOString(),
+    })
+    .eq("id", jobId);
+
+  console.log(`[brand_tagged_content] Brand ${brandAccountId}: ${contentCount} contents, ${relationshipCount} relationships from ${influencerStats.size} influencers`);
+
+  // Auto-trigger IG enrichment for newly created influencers (follower_count=null)
+  if (job.platform === "instagram") {
+    const newInfluencerIds: string[] = [];
+    for (const [, stats] of influencerStats) {
+      if (stats.influencer_id) newInfluencerIds.push(stats.influencer_id);
+    }
+    if (newInfluencerIds.length > 0) {
+      try {
+        const { data: unenriched } = await supabase
+          .from("influencers")
+          .select("username")
+          .in("id", newInfluencerIds)
+          .is("follower_count", null)
+          .limit(200);
+
+        if (unenriched && unenriched.length > 0) {
+          const usernames = unenriched.map((u: Record<string, unknown>) => u.username as string).filter(Boolean);
+          if (usernames.length > 0) {
+            const enrichRun = await startActor(APIFY_ACTORS.INSTAGRAM_PROFILE, { usernames });
+            const { data: enrichJob } = await supabase
+              .from("extraction_jobs")
+              .insert({
+                type: "enrich",
+                platform: "instagram",
+                source_id: brandAccountId,
+                status: "running",
+                apify_run_id: enrichRun.id,
+                input_config: {
+                  brand_account_id: brandAccountId,
+                  enrichment_source: "brand_tagged_content",
+                  influencer_count: usernames.length,
+                } as unknown as Json,
+              })
+              .select("id")
+              .single();
+            console.log(`[brand_tagged_content] Auto-triggered enrichment for ${usernames.length} influencers, job: ${enrichJob?.id}`);
+          }
+        }
+      } catch (enrichErr) {
+        console.error("[brand_tagged_content] Enrichment auto-trigger failed:", enrichErr);
+      }
+    }
+  }
+
+  return NextResponse.json({
+    status: "completed",
+    total_extracted: contentCount,
+    new_relationships: relationshipCount,
+    unique_influencers: influencerStats.size,
+    type: "brand_tagged_content",
+  });
+}
+
+/**
+ * Auto-trigger brand content discovery after profile analysis
+ */
+async function autoTriggerBrandContentDiscovery(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  brandAccountId: string,
+  platform: string,
+): Promise<string | null> {
+  try {
+    // Get brand info
+    const { data: brand } = await supabase
+      .from("brand_accounts")
+      .select("username, team_id")
+      .eq("id", brandAccountId)
+      .single();
+
+    if (!brand) return null;
+
+    // Check if already running
+    const { data: existing } = await supabase
+      .from("extraction_jobs")
+      .select("id")
+      .eq("type", "brand_tagged_content")
+      .eq("source_id", brandAccountId)
+      .in("status", ["running", "pending"])
+      .limit(1);
+
+    if (existing && existing.length > 0) return null;
+
+    // Determine actor and input based on platform
+    let actorId: string;
+    let input: Record<string, unknown>;
+    const username = brand.username;
+
+    switch (platform) {
+      case "instagram":
+        actorId = APIFY_ACTORS.INSTAGRAM_TAGGED;
+        input = { username: [username], resultsLimit: 200 };
+        break;
+      case "tiktok":
+        actorId = APIFY_ACTORS.TIKTOK;
+        input = { searchQueries: [`@${username}`], resultsPerPage: 200 };
+        break;
+      case "youtube":
+        actorId = APIFY_ACTORS.YOUTUBE;
+        input = { searchKeywords: `@${username}`, maxResults: 100 };
+        break;
+      case "twitter":
+        actorId = APIFY_ACTORS.TWITTER;
+        input = { searchTerms: [`@${username}`], maxItems: 200 };
+        break;
+      default:
+        return null;
+    }
+
+    const run = await startActor(actorId, input);
+
+    const { data: jobData } = await supabase
+      .from("extraction_jobs")
+      .insert({
+        type: "brand_tagged_content",
+        platform,
+        source_id: brandAccountId,
+        status: "running",
+        apify_run_id: run.id,
+        input_config: {
+          brand_account_id: brandAccountId,
+          username,
+          actor_id: actorId,
+        } as unknown as Json,
+      })
+      .select("id")
+      .single();
+
+    console.log(`[autoTriggerBrandContentDiscovery] Started ${actorId} for @${username}, run=${run.id}`);
+    return jobData?.id ?? null;
+  } catch (err) {
+    console.error("[autoTriggerBrandContentDiscovery] Error:", err);
+    return null;
   }
 }
 

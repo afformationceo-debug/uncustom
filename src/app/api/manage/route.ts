@@ -38,8 +38,8 @@ export async function GET(request: Request) {
       .from("campaign_influencers")
       .select(
         `*,
-        influencer:influencers!inner(id, username, display_name, email, platform, follower_count, profile_image_url, profile_url, real_name, birth_date, phone),
-        campaign:campaigns!campaign_id(id, name, campaign_type)`,
+        influencer:influencers!inner(id, username, display_name, email, platform, follower_count, profile_image_url, profile_url, real_name, birth_date, phone, gender, line_id, country, crm_user_id, default_settlement_info),
+        campaign:campaigns!campaign_id(id, name, campaign_type, crm_hospital_id, crm_hospital_code)`,
         { count: "exact" }
       );
 

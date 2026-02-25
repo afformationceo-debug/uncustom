@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { FUNNEL_TO_LEGACY_STATUS } from "@/types/platform";
 import type { FunnelStatus } from "@/types/platform";
+import { syncStatusToCrm } from "@/lib/crm/register";
 
 export async function POST(request: Request) {
   try {
@@ -84,6 +85,31 @@ export async function POST(request: Request) {
       // Insert in batches of 500
       for (let i = 0; i < logEntries.length; i += 500) {
         await supabase.from("funnel_activity_log").insert(logEntries.slice(i, i + 500));
+      }
+    }
+
+    // CRM sync: push changes to MySQL CRM for linked records
+    const CRM_SYNC_FIELDS = ["visit_completed", "upload_url", "influencer_payment_status", "client_payment_status"] as const;
+    const hasCrmSyncFields = CRM_SYNC_FIELDS.some((f) => f in updatePayload);
+
+    if (hasCrmSyncFields) {
+      // Find records with CRM reservation links
+      const { data: crmLinked } = await supabase
+        .from("campaign_influencers")
+        .select("id, crm_reservation_id")
+        .in("id", ids)
+        .not("crm_reservation_id", "is", null);
+
+      if (crmLinked && crmLinked.length > 0) {
+        for (const rec of crmLinked) {
+          for (const field of CRM_SYNC_FIELDS) {
+            if (field in updatePayload) {
+              syncStatusToCrm(supabase, rec.id, field, updatePayload[field]).catch((err) =>
+                console.error(`CRM bulk sync ${field} for ${rec.id} failed:`, err)
+              );
+            }
+          }
+        }
       }
     }
 

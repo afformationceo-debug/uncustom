@@ -4,6 +4,10 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
@@ -14,6 +18,10 @@ interface InfluencerInfo {
   real_name?: string | null;
   birth_date?: string | null;
   phone?: string | null;
+  gender?: string | null;
+  line_id?: string | null;
+  country?: string | null;
+  email?: string | null;
 }
 
 interface InlineInfluencerInfoEditorProps {
@@ -22,6 +30,11 @@ interface InlineInfluencerInfoEditorProps {
   birthDate: string | null;
   phone: string | null;
   displayName: string | null;
+  gender?: string | null;
+  lineId?: string | null;
+  country?: string | null;
+  email?: string | null;
+  crmUserId?: number | null;
   onSaved?: (updated: InfluencerInfo) => void;
 }
 
@@ -31,6 +44,11 @@ export function InlineInfluencerInfoEditor({
   birthDate,
   phone,
   displayName,
+  gender,
+  lineId,
+  country,
+  email,
+  crmUserId,
   onSaved,
 }: InlineInfluencerInfoEditorProps) {
   const [open, setOpen] = useState(false);
@@ -38,6 +56,10 @@ export function InlineInfluencerInfoEditor({
     real_name: realName,
     birth_date: birthDate,
     phone: phone,
+    gender: gender,
+    line_id: lineId,
+    country: country,
+    email: email,
   });
   const [saving, setSaving] = useState(false);
 
@@ -48,6 +70,10 @@ export function InlineInfluencerInfoEditor({
       real_name: realName,
       birth_date: birthDate,
       phone: phone,
+      gender: gender,
+      line_id: lineId,
+      country: country,
+      email: email,
     });
     setOpen(true);
   }
@@ -62,6 +88,10 @@ export function InlineInfluencerInfoEditor({
           real_name: form.real_name?.trim() || null,
           birth_date: form.birth_date || null,
           phone: form.phone?.trim() || null,
+          gender: form.gender || null,
+          line_id: form.line_id?.trim() || null,
+          country: form.country?.trim() || null,
+          email: form.email?.trim() || null,
         }),
       });
       if (res.ok) {
@@ -93,11 +123,17 @@ export function InlineInfluencerInfoEditor({
         )}
       </button>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="max-w-sm max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>인플루언서 정보</DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
+            {crmUserId && (
+              <div className="flex items-center gap-2">
+                <Label className="text-xs text-muted-foreground">CRM ID</Label>
+                <Badge variant="outline" className="text-[10px]">#{crmUserId}</Badge>
+              </div>
+            )}
             <div>
               <Label className="text-xs">실제 성함</Label>
               <Input
@@ -117,11 +153,52 @@ export function InlineInfluencerInfoEditor({
               />
             </div>
             <div>
+              <Label className="text-xs">성별</Label>
+              <Select value={form.gender ?? "__none__"} onValueChange={(v) => setForm({ ...form, gender: v === "__none__" ? null : v })}>
+                <SelectTrigger className="h-8 text-sm">
+                  <SelectValue placeholder="선택" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">미지정</SelectItem>
+                  <SelectItem value="M">남성</SelectItem>
+                  <SelectItem value="F">여성</SelectItem>
+                  <SelectItem value="other">기타</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
               <Label className="text-xs">연락처</Label>
               <Input
                 value={form.phone ?? ""}
                 onChange={(e) => setForm({ ...form, phone: e.target.value })}
                 placeholder="전화번호"
+                className="h-8 text-sm"
+              />
+            </div>
+            <div>
+              <Label className="text-xs">이메일</Label>
+              <Input
+                value={form.email ?? ""}
+                onChange={(e) => setForm({ ...form, email: e.target.value })}
+                placeholder="이메일"
+                className="h-8 text-sm"
+              />
+            </div>
+            <div>
+              <Label className="text-xs">LINE ID</Label>
+              <Input
+                value={form.line_id ?? ""}
+                onChange={(e) => setForm({ ...form, line_id: e.target.value })}
+                placeholder="LINE 메신저 ID"
+                className="h-8 text-sm"
+              />
+            </div>
+            <div>
+              <Label className="text-xs">국가</Label>
+              <Input
+                value={form.country ?? ""}
+                onChange={(e) => setForm({ ...form, country: e.target.value })}
+                placeholder="KR, JP, TW..."
                 className="h-8 text-sm"
               />
             </div>

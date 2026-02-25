@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Calendar, ArrowRight } from "lucide-react";
+import { Calendar, ArrowRight, Building2 } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -107,6 +107,17 @@ export function CampaignCard({ campaign }: CampaignCardProps) {
                 수정일:{" "}
                 {new Date(campaign.updated_at).toLocaleDateString("ko-KR")}
               </span>
+            </div>
+          )}
+          {campaign.crm_hospital_id && (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground mt-1">
+              <Building2 className="h-4 w-4" />
+              <span>CRM 병원 #{campaign.crm_hospital_id}</span>
+              {campaign.crm_hospital_code && (
+                <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                  {campaign.crm_hospital_code}
+                </Badge>
+              )}
             </div>
           )}
         </CardContent>
