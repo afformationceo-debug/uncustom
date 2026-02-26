@@ -92,24 +92,62 @@ type CampaignAssignment = {
   campaign_status: string | null;
   funnel_status: string;
   outreach_round: number;
+  outreach_type: string | null;
   last_outreach_at: string | null;
   reply_date: string | null;
+  reply_channel: string | null;
+  reply_summary: string | null;
   interest_confirmed: boolean;
   client_approved: boolean;
   final_confirmed: boolean;
+  guideline_url: string | null;
+  guideline_sent: boolean;
+  crm_registered: boolean;
+  crm_procedure: string | null;
   visit_scheduled_date: string | null;
   visit_completed: boolean;
+  interpreter_name: string | null;
   upload_deadline: string | null;
   actual_upload_date: string | null;
   upload_url: string | null;
+  shipping_address: string | null;
+  tracking_number: string | null;
   payment_amount: number | null;
   payment_currency: string | null;
+  invoice_amount: number | null;
+  invoice_currency: string | null;
   influencer_payment_status: string | null;
   client_payment_status: string | null;
+  settlement_info: Record<string, unknown> | null;
+  real_name: string | null;
   notes: string | null;
   created_at: string;
 };
 type CampaignAssignmentMap = Record<string, CampaignAssignment[]>;
+
+type BrandRelData = {
+  brand_name: string;
+  brand_username: string;
+  total_collaborations: number;
+  relationship_strength_score: number | null;
+  estimated_collaboration_value: number | null;
+  likely_payment_model: string | null;
+  is_brand_ambassador: boolean;
+  last_collaboration_at: string | null;
+};
+type BrandRelMap = Record<string, BrandRelData[]>;
+
+type EmailLogData = {
+  campaign_name: string;
+  round_number: number;
+  status: string;
+  sent_at: string | null;
+  opened_at: string | null;
+  clicked_at: string | null;
+  replied_at: string | null;
+};
+type EmailLogMap = Record<string, EmailLogData[]>;
+
 type SortField = string; // Any DB column name
 type SortDir = "asc" | "desc";
 type PlatformFilter = "instagram" | "tiktok" | "youtube" | "twitter";
@@ -155,6 +193,10 @@ const COLUMN_SORT_MAP: Record<string, string> = {
   is_monetized: "is_monetized",
   keywords: "created_at",
   created_at: "created_at",
+  import_source: "import_source",
+  enrich_status: "follower_count",
+  real_name: "real_name",
+  campaign_count: "created_at",
   crm_user_id: "crm_user_id",
   gender: "gender",
   line_id: "line_id",
@@ -228,6 +270,9 @@ type RenderHelpers = {
   getProfileUrl: (inf: Influencer) => string;
   getRawField: (inf: Influencer, field: string) => unknown;
   onYtEmail?: (id: string, username: string | null) => void;
+  getAssignments?: (influencerId: string) => CampaignAssignment[];
+  getBrandRels?: (influencerId: string) => BrandRelData[];
+  getEmailLogs?: (influencerId: string) => EmailLogData[];
 };
 
 function getProfileUrl(inf: Influencer): string {
@@ -364,14 +409,32 @@ function getCommonTailColumns(): ColumnDef[] {
     },
   };
 
+  // Mini score bar component for visual scores
+  const ScoreBar = ({ score, label }: { score: number; label?: string }) => {
+    const color = score >= 70 ? "bg-green-500" : score >= 40 ? "bg-amber-500" : "bg-red-400";
+    const textColor = score >= 70 ? "text-green-600 dark:text-green-400" : score >= 40 ? "text-amber-600 dark:text-amber-400" : "text-red-500 dark:text-red-400";
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <div className="flex items-center gap-1 min-w-[52px]">
+            <span className={`text-xs font-semibold tabular-nums w-6 text-right ${textColor}`}>{score.toFixed(0)}</span>
+            <div className="w-5 h-1.5 bg-muted rounded-full overflow-hidden">
+              <div className={`h-full rounded-full ${color}`} style={{ width: `${score}%` }} />
+            </div>
+          </div>
+        </TooltipTrigger>
+        <TooltipContent>{label || ""} {score.toFixed(1)}/100</TooltipContent>
+      </Tooltip>
+    );
+  };
+
   const influenceScoreCol: ColumnDef = {
     key: "influence_score",
     label: "영향력",
     render: (inf) => {
       const score = (inf as Record<string, unknown>).influence_score as number | null;
-      if (score == null) return <span className="text-muted-foreground text-xs">-</span>;
-      const color = score >= 70 ? "text-green-600 dark:text-green-400" : score >= 40 ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground";
-      return <span className={`text-xs font-medium tabular-nums ${color}`}>{score.toFixed(0)}</span>;
+      if (score == null) return <span className="text-muted-foreground/40 text-[10px]">·</span>;
+      return <ScoreBar score={score} label="영향력" />;
     },
   };
 
@@ -380,19 +443,43 @@ function getCommonTailColumns(): ColumnDef[] {
     label: "콘텐츠품질",
     render: (inf) => {
       const score = (inf as Record<string, unknown>).content_quality_score as number | null;
-      if (score == null) return <span className="text-muted-foreground text-xs">-</span>;
-      const color = score >= 70 ? "text-green-600 dark:text-green-400" : score >= 40 ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground";
-      return <span className={`text-xs font-medium tabular-nums ${color}`}>{score.toFixed(0)}</span>;
+      if (score == null) return <span className="text-muted-foreground/40 text-[10px]">·</span>;
+      return <ScoreBar score={score} label="콘텐츠 품질" />;
     },
   };
 
   const brandCollabCol: ColumnDef = {
     key: "brand_collab_count",
     label: "브랜드협업",
-    render: (inf) => {
-      const count = (inf as Record<string, unknown>).brand_collab_count as number | null;
-      if (!count) return <span className="text-muted-foreground text-xs">-</span>;
-      return <span className="text-xs tabular-nums">{count}</span>;
+    render: (inf, helpers) => {
+      const rels = helpers.getBrandRels?.(inf.id);
+      const staticCount = (inf as Record<string, unknown>).brand_collab_count as number | null;
+      const count = rels && rels.length > 0 ? rels.length : staticCount;
+      if (!count) return <span className="text-muted-foreground/40 text-[10px]">·</span>;
+      if (rels && rels.length > 0) {
+        const totalCollabs = rels.reduce((s, r) => s + r.total_collaborations, 0);
+        return (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className="flex items-center gap-1 cursor-default">
+                <Badge variant="secondary" className="text-[10px] px-1.5 py-0 tabular-nums bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300">{rels.length}브랜드</Badge>
+                {totalCollabs > rels.length && <span className="text-[9px] text-muted-foreground">{totalCollabs}회</span>}
+              </div>
+            </TooltipTrigger>
+            <TooltipContent>
+              <div className="space-y-1 max-w-[250px]">
+                {rels.map((r, i) => (
+                  <div key={i} className="text-xs flex items-center justify-between gap-2">
+                    <span className="font-medium">@{r.brand_username}</span>
+                    <span className="text-muted-foreground">{r.total_collaborations}회{r.likely_payment_model ? ` · ${r.likely_payment_model}` : ""}{r.is_brand_ambassador ? " · 앰배서더" : ""}</span>
+                  </div>
+                ))}
+              </div>
+            </TooltipContent>
+          </Tooltip>
+        );
+      }
+      return <Badge variant="secondary" className="text-[10px] px-1.5 py-0 tabular-nums">{count}건</Badge>;
     },
   };
 
@@ -401,8 +488,8 @@ function getCommonTailColumns(): ColumnDef[] {
     label: "이커머스",
     render: (inf) => {
       const enabled = (inf as Record<string, unknown>).commerce_enabled as boolean | null;
-      if (!enabled) return <span className="text-muted-foreground text-xs">-</span>;
-      return <Badge variant="secondary" className="text-[10px] px-1.5 py-0">활성</Badge>;
+      if (!enabled) return <span className="text-muted-foreground/40 text-[10px]">·</span>;
+      return <Badge variant="secondary" className="text-[10px] px-1.5 py-0 bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300">활성</Badge>;
     },
   };
 
@@ -411,9 +498,8 @@ function getCommonTailColumns(): ColumnDef[] {
     label: "진성오디언스",
     render: (inf) => {
       const score = (inf as Record<string, unknown>).audience_authenticity_score as number | null;
-      if (score == null) return <span className="text-muted-foreground text-xs">-</span>;
-      const color = score >= 70 ? "text-green-600" : score >= 40 ? "text-amber-600" : "text-red-500";
-      return <span className={`text-xs font-medium tabular-nums ${color}`}>{score.toFixed(1)}</span>;
+      if (score == null) return <span className="text-muted-foreground/40 text-[10px]">·</span>;
+      return <ScoreBar score={score} label="진성 오디언스" />;
     },
   };
 
@@ -422,13 +508,455 @@ function getCommonTailColumns(): ColumnDef[] {
     label: "최근콘텐츠",
     render: (inf) => {
       const dt = (inf as Record<string, unknown>).last_content_at as string | null;
-      if (!dt) return <span className="text-muted-foreground text-xs">-</span>;
-      return <span className="text-xs tabular-nums">{new Date(dt).toLocaleDateString("ko-KR", { month: "short", day: "numeric" })}</span>;
+      if (!dt) return <span className="text-muted-foreground/40 text-[10px]">·</span>;
+      const d = new Date(dt);
+      const now = new Date();
+      const days = Math.floor((now.getTime() - d.getTime()) / 86400000);
+      const isRecent = days < 30;
+      const isOld = days > 180;
+      const color = isRecent ? "text-green-600 dark:text-green-400" : isOld ? "text-muted-foreground" : "text-foreground";
+      return (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className={`text-xs tabular-nums ${color}`}>{d.toLocaleDateString("ko-KR", { month: "short", day: "numeric" })}</span>
+          </TooltipTrigger>
+          <TooltipContent>{days}일 전{isRecent ? " (최근 활동)" : isOld ? " (장기 미활동)" : ""}</TooltipContent>
+        </Tooltip>
+      );
     },
   };
 
-  return [keywordsCol, influenceScoreCol, contentQualityCol, audienceAuthCol, brandCollabCol, commerceCol, lastContentCol, crmIdCol, genderCol, lineIdCol, settlementCol, dateCol];
+  // Data source column - WHERE did this influencer come from?
+  const dataSourceCol: ColumnDef = {
+    key: "import_source",
+    label: "출처",
+    render: (inf) => {
+      const src = inf.import_source;
+      if (!src) return <span className="text-muted-foreground text-xs">-</span>;
+      // Parse import_source patterns
+      if (src.startsWith("apify:keyword:") || src.startsWith("apify:hashtag")) {
+        const detail = src.replace(/^apify:(keyword|hashtag-bulk|hashtag):/, "");
+        return (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="inline-flex items-center gap-0.5 text-[10px] bg-violet-50 text-violet-700 dark:bg-violet-950 dark:text-violet-300 px-1.5 py-0 rounded cursor-default">
+                <Hash className="w-2.5 h-2.5" />KW
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>키워드 추출: {detail}</TooltipContent>
+          </Tooltip>
+        );
+      }
+      if (src.startsWith("apify:tagged:") || src === "brand_tagged") {
+        const account = src.replace("apify:tagged:", "");
+        return (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="inline-flex items-center gap-0.5 text-[10px] bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300 px-1.5 py-0 rounded cursor-default">
+                <Tag className="w-2.5 h-2.5" />브랜드
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>{src === "brand_tagged" ? "브랜드 태그 추출" : `태그 추출: ${account}`}</TooltipContent>
+          </Tooltip>
+        );
+      }
+      if (src === "excel" || src === "import") {
+        return (
+          <span className="text-[10px] bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300 px-1.5 py-0 rounded">Excel</span>
+        );
+      }
+      if (src === "crm" || src.startsWith("crm") || src === "crm_links") {
+        return (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="text-[10px] bg-teal-50 text-teal-700 dark:bg-teal-950 dark:text-teal-300 px-1.5 py-0 rounded cursor-default">CRM</span>
+            </TooltipTrigger>
+            <TooltipContent>{src === "crm_links" ? "CRM 바이오 링크 추출" : `CRM 연동: ${src}`}</TooltipContent>
+          </Tooltip>
+        );
+      }
+      if (src === "manual") {
+        return <span className="text-[10px] bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400 px-1.5 py-0 rounded">수동</span>;
+      }
+      return (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="text-[10px] text-muted-foreground cursor-default">{src.slice(0, 8)}</span>
+          </TooltipTrigger>
+          <TooltipContent>{src}</TooltipContent>
+        </Tooltip>
+      );
+    },
+  };
+
+  // Helper to get latest assignment
+  function getLatest(helpers: RenderHelpers, infId: string): CampaignAssignment | null {
+    const assigns = helpers.getAssignments?.(infId);
+    if (!assigns || assigns.length === 0) return null;
+    return [...assigns].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+  }
+
+  // Campaign name + count — show all campaigns compactly
+  const campaignInfoCol: ColumnDef = {
+    key: "campaign_count",
+    label: "캠페인",
+    render: (inf, helpers) => {
+      const assigns = helpers.getAssignments?.(inf.id);
+      if (!assigns || assigns.length === 0) return <span className="text-muted-foreground text-xs">-</span>;
+      // Show up to 2 campaigns inline with funnel status dots
+      const sorted = [...assigns].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      return (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div className="flex flex-col gap-0.5 cursor-default max-w-[160px]">
+              {sorted.slice(0, 2).map((a) => {
+                const fi = FUNNEL_STATUSES.find((f) => f.value === a.funnel_status);
+                const color = fi?.color ?? "#6B7280";
+                return (
+                  <div key={a.id} className="flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
+                    <span className="text-[10px] font-medium truncate">{a.name}</span>
+                  </div>
+                );
+              })}
+              {sorted.length > 2 && (
+                <span className="text-[9px] text-muted-foreground pl-2.5">+{sorted.length - 2}개 캠페인</span>
+              )}
+            </div>
+          </TooltipTrigger>
+          <TooltipContent>
+            <div className="space-y-1.5 max-w-[280px]">
+              {sorted.map((a) => {
+                const fi = FUNNEL_STATUSES.find((f) => f.value === a.funnel_status);
+                return (
+                  <div key={a.id} className="text-xs">
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: fi?.color ?? "#6B7280" }} />
+                      <span className="font-medium">{a.name}</span>
+                      <span className="text-muted-foreground">({a.campaign_type === "shipping" ? "배송" : "방문"})</span>
+                    </div>
+                    <div className="pl-3.5 text-muted-foreground">
+                      {fi?.label ?? a.funnel_status}
+                      {a.payment_amount ? ` · ${new Intl.NumberFormat("ko-KR", { style: "currency", currency: a.payment_currency ?? "KRW", maximumFractionDigits: 0 }).format(a.payment_amount)}` : ""}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </TooltipContent>
+        </Tooltip>
+      );
+    },
+  };
+
+  // Funnel status — show most advanced funnel + count if multiple
+  const funnelCol: ColumnDef = {
+    key: "funnel_status",
+    label: "퍼널",
+    render: (inf, helpers) => {
+      const assigns = helpers.getAssignments?.(inf.id);
+      if (!assigns || assigns.length === 0) return <span className="text-muted-foreground text-xs">-</span>;
+      // Sort by funnel progression (most advanced first)
+      const funnelOrder = FUNNEL_STATUSES.map(f => f.value as string);
+      const sorted = [...assigns].sort((a, b) => funnelOrder.indexOf(b.funnel_status) - funnelOrder.indexOf(a.funnel_status));
+      const best = sorted[0];
+      const fi = FUNNEL_STATUSES.find((f) => f.value === best.funnel_status);
+      const color = fi?.color ?? "#6B7280";
+      return (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div className="inline-flex items-center gap-1">
+              <span
+                className="text-[10px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap inline-flex items-center gap-1"
+                style={{ backgroundColor: `${color}18`, color, border: `1px solid ${color}40` }}
+              >
+                <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
+                {fi?.label ?? best.funnel_status}
+              </span>
+              {assigns.length > 1 && (
+                <span className="text-[9px] bg-muted text-muted-foreground px-1 rounded-full">{assigns.length}</span>
+              )}
+            </div>
+          </TooltipTrigger>
+          {assigns.length > 1 && (
+            <TooltipContent>
+              <div className="space-y-1">
+                {sorted.map((a) => {
+                  const afi = FUNNEL_STATUSES.find((f) => f.value === a.funnel_status);
+                  return (
+                    <div key={a.id} className="text-xs flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: afi?.color ?? "#6B7280" }} />
+                      <span>{a.name}</span>
+                      <span className="text-muted-foreground">— {afi?.label ?? a.funnel_status}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </TooltipContent>
+          )}
+        </Tooltip>
+      );
+    },
+  };
+
+  // Outreach — campaign assignment data + email_logs fallback
+  const outreachCol: ColumnDef = {
+    key: "outreach_info",
+    label: "발송",
+    render: (inf, helpers) => {
+      const latest = getLatest(helpers, inf.id);
+      const emailLogs = helpers.getEmailLogs?.(inf.id);
+      // Campaign-based outreach data (priority)
+      if (latest && (latest.outreach_round > 0 || latest.outreach_type)) {
+        return (
+          <div className="flex items-center gap-1">
+            {latest.outreach_round > 0 && (
+              <span className="text-[10px] font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200 px-1.5 py-0 rounded">
+                {latest.outreach_round}차
+              </span>
+            )}
+            {latest.outreach_type && (
+              <span className="text-[9px] text-muted-foreground">{latest.outreach_type === "email" ? "메일" : "DM"}</span>
+            )}
+            {latest.reply_date && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="text-[10px] font-medium bg-violet-100 text-violet-800 dark:bg-violet-900 dark:text-violet-200 px-1 py-0 rounded cursor-default">회신</span>
+                </TooltipTrigger>
+                <TooltipContent>{latest.reply_channel && `${latest.reply_channel} · `}{new Date(latest.reply_date).toLocaleDateString("ko-KR")}{latest.reply_summary && ` · ${latest.reply_summary}`}</TooltipContent>
+              </Tooltip>
+            )}
+          </div>
+        );
+      }
+      // Fallback: email_logs data (even without campaign assignment outreach data)
+      if (emailLogs && emailLogs.length > 0) {
+        const sent = emailLogs.filter(e => e.status !== "failed").length;
+        const opened = emailLogs.filter(e => e.opened_at).length;
+        const replied = emailLogs.filter(e => e.replied_at).length;
+        const maxRound = Math.max(...emailLogs.map(e => e.round_number));
+        return (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className="flex items-center gap-1 cursor-default">
+                <span className="text-[10px] font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200 px-1.5 py-0 rounded">{maxRound}차</span>
+                <span className="text-[9px] text-muted-foreground">메일</span>
+                {replied > 0 && <span className="text-[10px] font-medium bg-violet-100 text-violet-800 dark:bg-violet-900 dark:text-violet-200 px-1 py-0 rounded">회신</span>}
+                {opened > 0 && !replied && <span className="text-[10px] font-medium bg-sky-100 text-sky-800 dark:bg-sky-900 dark:text-sky-200 px-1 py-0 rounded">열람</span>}
+              </div>
+            </TooltipTrigger>
+            <TooltipContent>
+              <div className="text-xs space-y-0.5">
+                <p>이메일 {sent}건 발송 (최대 {maxRound}차)</p>
+                {opened > 0 && <p>열람 {opened}건</p>}
+                {replied > 0 && <p>회신 {replied}건</p>}
+                {emailLogs[0].campaign_name && <p className="text-muted-foreground">캠페인: {emailLogs[0].campaign_name}</p>}
+              </div>
+            </TooltipContent>
+          </Tooltip>
+        );
+      }
+      if (!latest) return <span className="text-muted-foreground text-xs">-</span>;
+      return <span className="text-muted-foreground text-xs">-</span>;
+    },
+  };
+
+  // Upload status — aggregated across all campaigns
+  const uploadCol: ColumnDef = {
+    key: "upload_status",
+    label: "업로드",
+    render: (inf, helpers) => {
+      const assigns = helpers.getAssignments?.(inf.id);
+      if (!assigns || assigns.length === 0) return <span className="text-muted-foreground text-xs">-</span>;
+      const uploaded = assigns.filter(a => a.upload_url || a.actual_upload_date || ["uploaded", "completed", "settled"].includes(a.funnel_status));
+      const pending = assigns.filter(a => a.upload_deadline && !a.upload_url && !a.actual_upload_date && !["uploaded", "completed", "settled"].includes(a.funnel_status));
+      const overdue = pending.filter(a => new Date(a.upload_deadline!) < new Date());
+      if (uploaded.length > 0) {
+        return (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className="flex items-center gap-1 cursor-default">
+                <span className="text-[10px] font-semibold bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200 px-2 py-0.5 rounded inline-flex items-center gap-0.5">
+                  완료{uploaded.length > 1 ? ` ${uploaded.length}` : ""}
+                  {uploaded[0].upload_url && <ExternalLink className="w-2.5 h-2.5" />}
+                </span>
+                {pending.length > 0 && <span className="text-[9px] bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300 px-1 py-0 rounded">+{pending.length}대기</span>}
+              </div>
+            </TooltipTrigger>
+            <TooltipContent>
+              <div className="space-y-1 text-xs">
+                {uploaded.map(a => (
+                  <p key={a.id}>✅ {a.name}{a.actual_upload_date ? ` · ${new Date(a.actual_upload_date).toLocaleDateString("ko-KR")}` : ""}</p>
+                ))}
+                {pending.map(a => (
+                  <p key={a.id}>⏳ {a.name} · 마감 {new Date(a.upload_deadline!).toLocaleDateString("ko-KR")}</p>
+                ))}
+              </div>
+            </TooltipContent>
+          </Tooltip>
+        );
+      }
+      if (overdue.length > 0) {
+        return (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="text-[10px] font-medium bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300 px-2 py-0.5 rounded cursor-default">지연 {overdue.length}</span>
+            </TooltipTrigger>
+            <TooltipContent>{overdue.map(a => <p key={a.id} className="text-xs">{a.name} · 마감 {new Date(a.upload_deadline!).toLocaleDateString("ko-KR")}</p>)}</TooltipContent>
+          </Tooltip>
+        );
+      }
+      if (pending.length > 0) {
+        return (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="text-[10px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300 px-2 py-0.5 rounded cursor-default">대기 {pending.length}</span>
+            </TooltipTrigger>
+            <TooltipContent>{pending.map(a => <p key={a.id} className="text-xs">{a.name} · 마감 {new Date(a.upload_deadline!).toLocaleDateString("ko-KR")}</p>)}</TooltipContent>
+          </Tooltip>
+        );
+      }
+      return <span className="text-muted-foreground text-xs">-</span>;
+    },
+  };
+
+  // Payment status — aggregated across all campaigns
+  const paymentCol: ColumnDef = {
+    key: "payment_info",
+    label: "정산",
+    render: (inf, helpers) => {
+      const assigns = helpers.getAssignments?.(inf.id);
+      if (!assigns || assigns.length === 0) return <span className="text-muted-foreground text-xs">-</span>;
+      const withPayment = assigns.filter(a => a.payment_amount || a.influencer_payment_status);
+      if (withPayment.length === 0) return <span className="text-muted-foreground text-xs">-</span>;
+      const totalAmount = withPayment.reduce((s, a) => s + (a.payment_amount ?? 0), 0);
+      const paidCount = withPayment.filter(a => a.influencer_payment_status === "paid").length;
+      const pendingCount = withPayment.filter(a => a.influencer_payment_status === "pending").length;
+      const mainCurrency = withPayment.find(a => a.payment_amount)?.payment_currency ?? "KRW";
+      if (totalAmount > 0) {
+        const formatted = new Intl.NumberFormat("ko-KR", { style: "currency", currency: mainCurrency, maximumFractionDigits: 0 }).format(totalAmount);
+        const allPaid = paidCount === withPayment.length;
+        const allPending = pendingCount === withPayment.length;
+        return (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className="flex items-center gap-1 cursor-default">
+                <span className={`text-[10px] font-semibold tabular-nums px-1.5 py-0 rounded ${allPaid ? "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300" : allPending ? "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300" : "bg-muted text-muted-foreground"}`}>
+                  {formatted}
+                </span>
+                {withPayment.length > 1 && <span className="text-[9px] text-muted-foreground">{withPayment.length}건</span>}
+              </div>
+            </TooltipTrigger>
+            <TooltipContent>
+              <div className="space-y-1 text-xs">
+                {withPayment.map(a => {
+                  const amt = a.payment_amount ? new Intl.NumberFormat("ko-KR", { style: "currency", currency: a.payment_currency ?? "KRW", maximumFractionDigits: 0 }).format(a.payment_amount) : "";
+                  const status = a.influencer_payment_status === "paid" ? "✅" : a.influencer_payment_status === "pending" ? "⏳" : "·";
+                  return <p key={a.id}>{status} {a.name}{amt ? ` · ${amt}` : ""}</p>;
+                })}
+              </div>
+            </TooltipContent>
+          </Tooltip>
+        );
+      }
+      if (paidCount > 0) return <span className="text-[10px] bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300 px-1.5 py-0 rounded">완료{paidCount > 1 ? ` ${paidCount}` : ""}</span>;
+      if (pendingCount > 0) return <span className="text-[10px] bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300 px-1.5 py-0 rounded">진행중{pendingCount > 1 ? ` ${pendingCount}` : ""}</span>;
+      return <span className="text-muted-foreground text-xs">-</span>;
+    },
+  };
+
+  // CRM + visit status — with visit date
+  const crmVisitCol: ColumnDef = {
+    key: "crm_visit",
+    label: "CRM/방문",
+    render: (inf, helpers) => {
+      const latest = getLatest(helpers, inf.id);
+      const hasCrm = !!inf.crm_user_id || latest?.crm_registered;
+      const visited = latest?.visit_completed;
+      const scheduled = latest?.visit_scheduled_date;
+      if (!hasCrm && !visited && !scheduled) return <span className="text-muted-foreground text-xs">-</span>;
+      return (
+        <div className="flex items-center gap-1 flex-wrap">
+          {hasCrm && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="text-[10px] font-medium bg-teal-100 text-teal-800 dark:bg-teal-900 dark:text-teal-200 px-1.5 py-0 rounded cursor-default">CRM</span>
+              </TooltipTrigger>
+              <TooltipContent>{latest?.crm_procedure ? `시술: ${latest.crm_procedure}` : "CRM 등록됨"}{inf.crm_user_id ? ` (ID: ${inf.crm_user_id})` : ""}</TooltipContent>
+            </Tooltip>
+          )}
+          {visited && (
+            <span className="text-[10px] font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200 px-1.5 py-0 rounded">방문</span>
+          )}
+          {scheduled && !visited && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="text-[10px] font-medium bg-cyan-100 text-cyan-800 dark:bg-cyan-900 dark:text-cyan-200 px-1.5 py-0 rounded cursor-default">예약</span>
+              </TooltipTrigger>
+              <TooltipContent>방문예약: {new Date(scheduled).toLocaleDateString("ko-KR")}{latest?.interpreter_name ? ` · 통역: ${latest.interpreter_name}` : ""}</TooltipContent>
+            </Tooltip>
+          )}
+        </div>
+      );
+    },
+  };
+
+  // Real name with gender icon
+  const realNameCol: ColumnDef = {
+    key: "real_name",
+    label: "실명",
+    render: (inf, helpers) => {
+      const latest = getLatest(helpers, inf.id);
+      const name = latest?.real_name || inf.real_name;
+      if (!name) return <span className="text-muted-foreground text-xs">-</span>;
+      return (
+        <span className="text-xs font-medium">
+          {name}
+        </span>
+      );
+    },
+  };
+
+  // Enrichment status — critical for identifying unenriched influencers
+  const enrichStatusCol: ColumnDef = {
+    key: "enrich_status",
+    label: "보강",
+    render: (inf) => {
+      const hasFollowers = inf.follower_count != null && inf.follower_count > 0;
+      const hasEmail = !!inf.email;
+      const hasBio = !!inf.bio;
+      if (hasFollowers && hasBio) {
+        return (
+          <span className="text-[10px] font-medium bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300 px-1.5 py-0 rounded">완료</span>
+        );
+      }
+      if (hasFollowers) {
+        return (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="text-[10px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300 px-1.5 py-0 rounded cursor-default">부분</span>
+            </TooltipTrigger>
+            <TooltipContent>팔로워 있음{!hasBio ? " · 바이오 없음" : ""}{!hasEmail ? " · 이메일 없음" : ""}</TooltipContent>
+          </Tooltip>
+        );
+      }
+      return (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="text-[10px] font-medium bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300 px-1.5 py-0 rounded cursor-default">필요</span>
+          </TooltipTrigger>
+          <TooltipContent>프로필 보강 필요 — 팔로워, 바이오 등 미수집</TooltipContent>
+        </Tooltip>
+      );
+    },
+  };
+
+  // Priority columns (shown right after username): 9개
+  // Tail columns (shown after platform-specific columns)
+  return [dataSourceCol, enrichStatusCol, campaignInfoCol, funnelCol, realNameCol, outreachCol, uploadCol, paymentCol, crmVisitCol, keywordsCol, influenceScoreCol, contentQualityCol, audienceAuthCol, brandCollabCol, commerceCol, lastContentCol, genderCol, lineIdCol, settlementCol, dateCol];
 }
+
+
 
 // ---------------------------------------------------------------------------
 // Column factory helpers (reduce duplication)
@@ -555,11 +1083,15 @@ function colPrivate(): ColumnDef {
   return {
     key: "is_private",
     label: "비공개",
-    render: (inf) => inf.is_private ? (
-      <Badge variant="outline" className="text-[10px] px-1 py-0 bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300">비공개</Badge>
-    ) : (
-      <span className="text-muted-foreground text-xs">-</span>
-    ),
+    render: (inf) => {
+      if (inf.is_private === true) {
+        return <Badge variant="outline" className="text-[10px] px-1 py-0 bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300">비공개</Badge>;
+      }
+      if (inf.is_private === false) {
+        return <span className="text-[10px] text-green-600 dark:text-green-400">공개</span>;
+      }
+      return <span className="text-muted-foreground text-xs">-</span>;
+    },
   };
 }
 
@@ -733,7 +1265,10 @@ function colCoverImage(): ColumnDef {
 
 // Columns for each platform view
 function getColumnsForPlatform(platform: PlatformFilter): ColumnDef[] {
-  const tail = getCommonTailColumns();
+  const allTail = getCommonTailColumns();
+  // Priority: 출처, 캠페인, 퍼널, 실명, 발송, 업로드, 정산, CRM/방문
+  const priority = allTail.slice(0, 9);
+  const tail = allTail.slice(9); // rest of tail (scores, keywords, etc.)
 
   const profileCol: ColumnDef = {
     key: "profile",
@@ -880,6 +1415,7 @@ function getColumnsForPlatform(platform: PlatformFilter): ColumnDef[] {
     return [
       profileCol,
       usernameCol,
+      ...priority,
       {
         key: "country",
         label: "국가",
@@ -1014,6 +1550,7 @@ function getColumnsForPlatform(platform: PlatformFilter): ColumnDef[] {
     return [
       profileCol,
       usernameCol,
+      ...priority,
       followersCol,
       {
         key: "following",
@@ -1093,6 +1630,7 @@ function getColumnsForPlatform(platform: PlatformFilter): ColumnDef[] {
           </a>
         ),
       },
+      ...priority,
       {
         key: "subscribers",
         label: "구독자",
@@ -1205,6 +1743,7 @@ function getColumnsForPlatform(platform: PlatformFilter): ColumnDef[] {
     return [
       profileCol,
       usernameCol,
+      ...priority,
       {
         key: "display_name",
         label: "표시명",
@@ -1328,6 +1867,7 @@ function getColumnsForPlatform(platform: PlatformFilter): ColumnDef[] {
   return [
     profileCol,
     usernameCol,
+    ...priority,
     followersCol,
     bioCol,
     emailCol,
@@ -1543,6 +2083,12 @@ export default function MasterPage() {
   // Campaign assignments for each influencer
   const [campaignAssignments, setCampaignAssignments] = useState<CampaignAssignmentMap>({});
 
+  // Brand relationships per influencer (from brand_influencer_relationships)
+  const [brandRelationships, setBrandRelationships] = useState<BrandRelMap>({});
+
+  // Email activity per influencer (from email_logs)
+  const [emailActivity, setEmailActivity] = useState<EmailLogMap>({});
+
   // Influencer links
   const [influencerLinks, setInfluencerLinks] = useState<Record<string, InfluencerLink[]>>({});
 
@@ -1579,6 +2125,10 @@ export default function MasterPage() {
     enrichment_rate: number;
     running_jobs: { id: string; apify_run_id: string; created_at: string }[];
   } | null>(null);
+  // Extended enrichment stats by source
+  const [enrichBySource, setEnrichBySource] = useState<{
+    source: string; total: number; needs_enrich: number; no_bio: number; no_email: number;
+  }[] | null>(null);
   const [enriching, setEnriching] = useState(false);
   const [showEnrichPanel, setShowEnrichPanel] = useState(false);
 
@@ -1597,9 +2147,19 @@ export default function MasterPage() {
     fetchInfluencers();
   }, [platformFilter, emailFilter, page, sortField, sortDir, verifiedFilter, businessFilter, enrichedFilter, countryFilter, followerMin, followerMax, categoryFilter, importSourceFilter]);
 
-  // Defer campaign assignments & links fetch until actually needed (expand row)
+  // Auto-load campaign assignments + brand relationships + email activity when influencers change
   const assignmentsFetched = useRef(false);
-  useEffect(() => { assignmentsFetched.current = false; }, [influencers]);
+  useEffect(() => {
+    assignmentsFetched.current = false;
+    if (influencers.length > 0) {
+      assignmentsFetched.current = true;
+      const ids = influencers.map((inf) => inf.id);
+      // Fetch all related data in parallel
+      fetchCampaignAssignments(ids);
+      fetchBrandRelationships(ids);
+      fetchEmailActivity(ids);
+    }
+  }, [influencers]);
 
   async function ensureAssignmentsLoaded() {
     if (assignmentsFetched.current || influencers.length === 0) return;
@@ -1607,6 +2167,8 @@ export default function MasterPage() {
     const ids = influencers.map((inf) => inf.id);
     fetchCampaignAssignments(ids);
     fetchInfluencerLinks(ids);
+    fetchBrandRelationships(ids);
+    fetchEmailActivity(ids);
   }
 
   // Selection persists across pages - no reset on page change
@@ -1695,12 +2257,18 @@ export default function MasterPage() {
       .from("campaign_influencers")
       .select(`
         id, influencer_id, campaign_id, funnel_status, status,
-        outreach_round, last_outreach_at, reply_date,
+        outreach_round, outreach_type, last_outreach_at,
+        reply_date, reply_channel, reply_summary,
         interest_confirmed, client_approved, final_confirmed,
-        visit_scheduled_date, visit_completed,
+        guideline_url, guideline_sent,
+        crm_registered, crm_procedure,
+        visit_scheduled_date, visit_completed, interpreter_name,
         upload_deadline, actual_upload_date, upload_url,
+        shipping_address, tracking_number,
         payment_amount, payment_currency,
+        invoice_amount, invoice_currency,
         influencer_payment_status, client_payment_status,
+        settlement_info,
         notes, created_at,
         campaign:campaigns!campaign_id(id, name, campaign_type, status)
       `)
@@ -1708,31 +2276,11 @@ export default function MasterPage() {
 
     if (data) {
       const map: CampaignAssignmentMap = {};
-      for (const row of data as unknown as {
-        id: string;
+      for (const row of data as unknown as (CampaignAssignment & {
         influencer_id: string;
-        campaign_id: string;
-        funnel_status: string;
         status: string;
-        outreach_round: number;
-        last_outreach_at: string | null;
-        reply_date: string | null;
-        interest_confirmed: boolean;
-        client_approved: boolean;
-        final_confirmed: boolean;
-        visit_scheduled_date: string | null;
-        visit_completed: boolean;
-        upload_deadline: string | null;
-        actual_upload_date: string | null;
-        upload_url: string | null;
-        payment_amount: number | null;
-        payment_currency: string | null;
-        influencer_payment_status: string | null;
-        client_payment_status: string | null;
-        notes: string | null;
-        created_at: string;
         campaign: { id: string; name: string; campaign_type: string | null; status: string | null };
-      }[]) {
+      })[]) {
         if (!map[row.influencer_id]) map[row.influencer_id] = [];
         if (row.campaign) {
           map[row.influencer_id].push({
@@ -1743,20 +2291,34 @@ export default function MasterPage() {
             campaign_status: row.campaign.status,
             funnel_status: row.funnel_status ?? "extracted",
             outreach_round: row.outreach_round ?? 0,
+            outreach_type: row.outreach_type ?? null,
             last_outreach_at: row.last_outreach_at,
             reply_date: row.reply_date,
+            reply_channel: row.reply_channel ?? null,
+            reply_summary: row.reply_summary ?? null,
             interest_confirmed: row.interest_confirmed ?? false,
             client_approved: row.client_approved ?? false,
             final_confirmed: row.final_confirmed ?? false,
+            guideline_url: row.guideline_url ?? null,
+            guideline_sent: row.guideline_sent ?? false,
+            crm_registered: row.crm_registered ?? false,
+            crm_procedure: row.crm_procedure ?? null,
             visit_scheduled_date: row.visit_scheduled_date,
             visit_completed: row.visit_completed ?? false,
+            interpreter_name: row.interpreter_name ?? null,
             upload_deadline: row.upload_deadline,
             actual_upload_date: row.actual_upload_date,
             upload_url: row.upload_url,
+            shipping_address: row.shipping_address ?? null,
+            tracking_number: row.tracking_number ?? null,
             payment_amount: row.payment_amount,
             payment_currency: row.payment_currency,
+            invoice_amount: row.invoice_amount ?? null,
+            invoice_currency: row.invoice_currency ?? null,
             influencer_payment_status: row.influencer_payment_status,
             client_payment_status: row.client_payment_status,
+            settlement_info: row.settlement_info as Record<string, unknown> | null,
+            real_name: null,
             notes: row.notes,
             created_at: row.created_at,
           });
@@ -1782,6 +2344,72 @@ export default function MasterPage() {
     }
   }
 
+  async function fetchBrandRelationships(influencerIds: string[]) {
+    if (influencerIds.length === 0) return;
+    const { data } = await supabase
+      .from("brand_influencer_relationships")
+      .select(`
+        influencer_id,
+        total_collaborations, relationship_strength_score,
+        estimated_collaboration_value, likely_payment_model,
+        is_brand_ambassador, last_collaboration_at,
+        brand:brand_accounts!brand_account_id(brand_name, username)
+      `)
+      .in("influencer_id", influencerIds);
+    if (data) {
+      const map: BrandRelMap = {};
+      for (const row of data as unknown as (BrandRelData & {
+        influencer_id: string;
+        brand: { brand_name: string | null; username: string } | null;
+      })[]) {
+        if (!map[row.influencer_id]) map[row.influencer_id] = [];
+        map[row.influencer_id].push({
+          brand_name: row.brand?.brand_name ?? "",
+          brand_username: row.brand?.username ?? "",
+          total_collaborations: row.total_collaborations,
+          relationship_strength_score: row.relationship_strength_score,
+          estimated_collaboration_value: row.estimated_collaboration_value,
+          likely_payment_model: row.likely_payment_model,
+          is_brand_ambassador: row.is_brand_ambassador ?? false,
+          last_collaboration_at: row.last_collaboration_at,
+        });
+      }
+      setBrandRelationships(map);
+    }
+  }
+
+  async function fetchEmailActivity(influencerIds: string[]) {
+    if (influencerIds.length === 0) return;
+    const { data } = await supabase
+      .from("email_logs")
+      .select(`
+        influencer_id, round_number, status,
+        sent_at, opened_at, clicked_at, replied_at,
+        campaign:campaigns!campaign_id(name)
+      `)
+      .in("influencer_id", influencerIds)
+      .order("sent_at", { ascending: false });
+    if (data) {
+      const map: EmailLogMap = {};
+      for (const row of data as unknown as (EmailLogData & {
+        influencer_id: string;
+        campaign: { name: string } | null;
+      })[]) {
+        if (!map[row.influencer_id]) map[row.influencer_id] = [];
+        map[row.influencer_id].push({
+          campaign_name: row.campaign?.name ?? "",
+          round_number: row.round_number ?? 1,
+          status: row.status,
+          sent_at: row.sent_at,
+          opened_at: row.opened_at,
+          clicked_at: row.clicked_at,
+          replied_at: row.replied_at,
+        });
+      }
+      setEmailActivity(map);
+    }
+  }
+
   // On-demand raw_data cache for expanded rows
   const [rawDataCache, setRawDataCache] = useState<Record<string, Record<string, unknown>>>({});
 
@@ -1798,7 +2426,7 @@ export default function MasterPage() {
   }
 
   // Select all columns EXCEPT raw_data (which is large JSONB) for performance
-  const INFLUENCER_SELECT = "id,platform,platform_id,username,display_name,profile_url,profile_image_url,email,email_source,bio,follower_count,following_count,post_count,engagement_rate,country,language,extracted_keywords,extracted_from_tags,is_verified,is_business,category,import_source,is_blue_verified,verified_type,location,heart_count,share_count,total_views,channel_joined_date,is_monetized,external_url,avg_likes,avg_comments,avg_views,avg_shares,source_content_url,source_content_text,source_content_media,source_content_created_at,content_language,content_hashtags,account_created_at,is_private,cover_image_url,bookmark_count,quote_count,favourites_count,video_duration,video_title,listed_count,media_count,is_sponsored,is_retweet,is_reply,mentions,music_info,product_type,last_updated_at,created_at,crm_user_id,gender,line_id,default_settlement_info,real_name,birth_date,phone";
+  const INFLUENCER_SELECT = "id,platform,platform_id,username,display_name,profile_url,profile_image_url,email,email_source,bio,follower_count,following_count,post_count,engagement_rate,country,language,extracted_keywords,extracted_from_tags,is_verified,is_business,category,import_source,is_blue_verified,verified_type,location,heart_count,share_count,total_views,channel_joined_date,is_monetized,external_url,avg_likes,avg_comments,avg_views,avg_shares,source_content_url,source_content_text,source_content_media,source_content_created_at,content_language,content_hashtags,account_created_at,is_private,cover_image_url,bookmark_count,quote_count,favourites_count,video_duration,video_title,listed_count,media_count,is_sponsored,is_retweet,is_reply,mentions,music_info,product_type,last_updated_at,created_at,crm_user_id,gender,line_id,default_settlement_info,real_name,birth_date,phone,influence_score,content_quality_score,audience_authenticity_score,brand_collab_count,commerce_enabled,last_content_at";
 
   async function fetchInfluencers() {
     setLoading(true);
@@ -2009,6 +2637,28 @@ export default function MasterPage() {
     } catch {
       // silent fail
     }
+    // Also fetch source-level breakdown
+    try {
+      const all = influencers;
+      if (all.length > 0) {
+        const bySource: Record<string, { total: number; needs_enrich: number; no_bio: number; no_email: number }> = {};
+        for (const inf of all) {
+          const src = inf.import_source || "unknown";
+          if (!bySource[src]) bySource[src] = { total: 0, needs_enrich: 0, no_bio: 0, no_email: 0 };
+          bySource[src].total++;
+          if (!inf.follower_count || inf.follower_count === 0) bySource[src].needs_enrich++;
+          if (!inf.bio) bySource[src].no_bio++;
+          if (!inf.email) bySource[src].no_email++;
+        }
+        const arr = Object.entries(bySource)
+          .map(([source, v]) => ({ source, ...v }))
+          .filter(v => v.needs_enrich > 0)
+          .sort((a, b) => b.needs_enrich - a.needs_enrich);
+        setEnrichBySource(arr.length > 0 ? arr : null);
+      }
+    } catch {
+      // silent
+    }
   }
 
   async function handleStartEnrichment(priority: "high" | "all") {
@@ -2137,7 +2787,13 @@ export default function MasterPage() {
   const totalAll = Object.values(platformCounts).reduce((a, b) => a + b, 0);
 
   const columns = getColumnsForPlatform(platformFilter);
-  const helpers: RenderHelpers = { formatCount, formatEngagement, getProfileUrl, getRawField, onYtEmail: handleSingleYtEmail };
+  const helpers: RenderHelpers = {
+    formatCount, formatEngagement, getProfileUrl, getRawField,
+    onYtEmail: handleSingleYtEmail,
+    getAssignments: (id: string) => campaignAssignments[id] ?? [],
+    getBrandRels: (id: string) => brandRelationships[id] ?? [],
+    getEmailLogs: (id: string) => emailActivity[id] ?? [],
+  };
 
   return (
     <div className="space-y-4">
@@ -2410,6 +3066,63 @@ export default function MasterPage() {
                     {enrichStats.running_jobs.length}개 보강 작업 실행 중
                   </div>
                 )}
+                {/* Source breakdown — where unenriched influencers came from */}
+                {enrichBySource && enrichBySource.length > 0 && (
+                  <div className="mt-3 border-t pt-3">
+                    <h4 className="text-xs font-semibold text-muted-foreground mb-2">출처별 미보강 현황</h4>
+                    <div className="space-y-1.5">
+                      {enrichBySource.map((s) => {
+                        const sourceLabel: Record<string, string> = {
+                          brand_tagged: "브랜드 태그 (콘텐츠 발견)",
+                          crm: "CRM 연동",
+                          crm_automation: "CRM 자동화",
+                          crm_customer: "CRM 고객",
+                          crm_links: "CRM 링크",
+                          crm_reservation: "CRM 예약",
+                        };
+                        const label = sourceLabel[s.source] || s.source.replace("apify:", "").replace("keyword:", "키워드:");
+                        const pct = Math.round((s.needs_enrich / s.total) * 100);
+                        const reason = s.source === "brand_tagged"
+                          ? "콘텐츠 발견 시 username만 수집 → 프로필 보강 필요"
+                          : s.source.startsWith("crm")
+                          ? "CRM에서 SNS username만 보유 → 프로필 스크래핑 필요"
+                          : "추출 후 보강 미완료";
+                        return (
+                          <Tooltip key={s.source}>
+                            <TooltipTrigger asChild>
+                              <div className="flex items-center gap-2 text-xs cursor-default">
+                                <span className="w-[140px] truncate text-muted-foreground">{label}</span>
+                                <div className="flex-1 bg-muted rounded-full h-1.5">
+                                  <div
+                                    className="bg-red-400 dark:bg-red-500 h-1.5 rounded-full"
+                                    style={{ width: `${pct}%` }}
+                                  />
+                                </div>
+                                <span className="text-red-600 dark:text-red-400 font-medium w-[60px] text-right">
+                                  {s.needs_enrich}/{s.total}
+                                </span>
+                              </div>
+                            </TooltipTrigger>
+                            <TooltipContent side="left">
+                              <p className="font-medium">{label}</p>
+                              <p className="text-xs">{reason}</p>
+                              <p className="text-xs mt-1">미보강: {s.needs_enrich}명 · 바이오없음: {s.no_bio} · 이메일없음: {s.no_email}</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+                {/* Data gap explanations */}
+                <div className="mt-3 border-t pt-3">
+                  <h4 className="text-xs font-semibold text-muted-foreground mb-1.5">빈 값 원인 안내</h4>
+                  <div className="space-y-1 text-[11px] text-muted-foreground">
+                    <p><span className="font-medium text-amber-600">brand_tagged 179명 (100%)</span> — 브랜드 콘텐츠 발견으로 들어온 인플루언서. username만 수집됨 → IG Profile Scraper로 보강 필요</p>
+                    <p><span className="font-medium text-amber-600">CRM 데이터 (95명)</span> — CRM에서 username 없이 이름/전화만 있는 경우 → SNS 프로필 연동 불가</p>
+                    <p><span className="font-medium text-blue-600">발송/정산/시술 0건</span> — CRM 마이그레이션에서 해당 필드 미이관. /crm 페이지에서 Phase 실행 필요</p>
+                  </div>
+                </div>
               </>
             ) : (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -3221,8 +3934,13 @@ function ExpandedDetail({
 
         {/* Info */}
         <div className="flex-1 min-w-0 space-y-2">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
             <h3 className="text-lg font-semibold">{inf.display_name ?? inf.username ?? "-"}</h3>
+            {inf.real_name && (
+              <span className="text-sm font-medium text-muted-foreground bg-muted px-2 py-0.5 rounded">
+                {inf.real_name}
+              </span>
+            )}
             <Badge
               variant="outline"
               className={`text-xs ${PLATFORM_BADGE_COLORS[inf.platform] ?? ""}`}
@@ -3237,6 +3955,22 @@ function ExpandedDetail({
             >
               @{inf.username} <ExternalLink className="w-3 h-3" />
             </a>
+            {/* Data source badge */}
+            {inf.import_source && (() => {
+              const src = inf.import_source;
+              const isKeyword = src.startsWith("apify:keyword:") || src.startsWith("apify:hashtag");
+              const isBrand = src.startsWith("apify:tagged:") || src === "brand_tagged";
+              const isCrm = src === "crm" || src.startsWith("crm") || src === "crm_links";
+              const isExcel = src === "excel" || src === "import";
+              const cls = isKeyword ? "bg-violet-50 text-violet-700 dark:bg-violet-950 dark:text-violet-300" :
+                isBrand ? "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300" :
+                isCrm ? "bg-teal-50 text-teal-700 dark:bg-teal-950 dark:text-teal-300" :
+                isExcel ? "bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300" :
+                "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400";
+              const label = isKeyword ? `KW: ${src.replace(/^apify:(keyword|hashtag-bulk|hashtag):/, "")}` :
+                isBrand ? "브랜드 태그 추출" : isCrm ? "CRM 연동" : isExcel ? "Excel" : src;
+              return <span className={`text-[10px] px-1.5 py-0 rounded ${cls}`}>{label}</span>;
+            })()}
           </div>
 
           {/* Metrics row */}
@@ -3306,13 +4040,25 @@ function ExpandedDetail({
             </div>
           )}
 
-          {/* Personal Info (real_name, birth_date, phone) */}
-          {(inf.real_name || inf.birth_date || inf.phone) && (
-            <div className="flex items-center gap-3 text-sm">
+          {/* Personal Info */}
+          {(inf.birth_date || inf.phone || inf.gender || inf.line_id) && (
+            <div className="flex items-center gap-3 text-sm flex-wrap">
               <User className="w-3.5 h-3.5 text-muted-foreground" />
-              {inf.real_name && <span className="font-medium">{inf.real_name}</span>}
+              {inf.gender && (
+                <span className="text-xs bg-muted px-1.5 py-0.5 rounded">
+                  {inf.gender === "M" ? "남" : inf.gender === "F" ? "여" : inf.gender}
+                </span>
+              )}
               {inf.birth_date && <span className="text-muted-foreground">{new Date(inf.birth_date).toLocaleDateString("ko-KR")}</span>}
               {inf.phone && <span className="text-muted-foreground">{inf.phone}</span>}
+              {inf.line_id && (
+                <span className="text-xs text-green-600 dark:text-green-400">LINE: {inf.line_id}</span>
+              )}
+              {inf.crm_user_id && (
+                <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-teal-300 text-teal-700 dark:border-teal-700 dark:text-teal-400">
+                  CRM #{inf.crm_user_id}
+                </Badge>
+              )}
             </div>
           )}
 
@@ -3539,100 +4285,54 @@ function ExpandedDetail({
         </div>
       )}
 
-      {/* Content Preview Grid - with video playback */}
-      <div className="space-y-2">
-        <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-          콘텐츠 미리보기 ({contentPosts.length}개)
-        </h4>
-        {contentPosts.length > 0 ? (
-          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">
-            {contentPosts.map((post, idx) => {
+      {/* Detail Tabs: Brand Collaborations, Commerce, Analytics — BEFORE content preview */}
+      <InfluencerDetailTabs influencerId={inf.id} />
+
+      {/* Content Preview — Compact horizontal strip (max 4 items) */}
+      {contentPosts.length > 0 && (
+        <div className="space-y-1.5">
+          <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+            콘텐츠 미리보기 ({contentPosts.length}개)
+          </h4>
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {contentPosts.slice(0, 4).map((post, idx) => {
               const isVid = post.type?.toLowerCase() === "video" || !!post.videoUrl;
               return (
-                <div
+                <button
                   key={idx}
-                  className="group/thumb relative aspect-square bg-muted rounded-lg overflow-hidden"
+                  className="group/thumb relative flex-shrink-0 w-20 h-20 bg-muted rounded-lg overflow-hidden"
+                  onClick={(e) => { e.stopPropagation(); onOpenModal?.(post); }}
                 >
-                  {isVid && post.videoUrl ? (
-                    <video
-                      src={post.videoUrl}
-                      poster={post.imageUrl}
-                      className="w-full h-full object-cover"
-                      muted
-                      playsInline
-                      preload="none"
-                      onMouseEnter={(e) => e.currentTarget.play().catch(() => {})}
-                      onMouseLeave={(e) => { e.currentTarget.pause(); e.currentTarget.currentTime = 0; }}
-                      onError={(e) => {
-                        const el = e.currentTarget;
-                        if (post.imageUrl) {
-                          const img = document.createElement("img");
-                          img.src = post.imageUrl;
-                          img.className = el.className;
-                          img.loading = "lazy";
-                          el.replaceWith(img);
-                        }
-                      }}
-                    />
-                  ) : (
-                    <img
-                      src={post.imageUrl}
-                      alt=""
-                      className="w-full h-full object-cover group-hover/thumb:scale-105 transition-transform duration-200"
-                      loading="lazy"
-                      referrerPolicy="no-referrer"
-                      onError={(e) => {
-                        e.currentTarget.style.display = "none";
-                      }}
-                    />
-                  )}
-                  {/* Overlay with metrics */}
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover/thumb:opacity-100 transition-opacity flex items-end p-1.5 pointer-events-none">
-                    <div className="flex items-center gap-2 text-white text-xs">
-                      {post.likes !== undefined && (
-                        <span className="flex items-center gap-0.5">
-                          <Heart className="w-3 h-3 fill-current" />{formatCount(post.likes)}
-                        </span>
-                      )}
-                      {post.comments !== undefined && (
-                        <span className="flex items-center gap-0.5">
-                          <MessageCircle className="w-3 h-3" />{formatCount(post.comments)}
-                        </span>
-                      )}
-                      {post.views !== undefined && (
-                        <span className="flex items-center gap-0.5">
-                          <Eye className="w-3 h-3" />{formatCount(post.views)}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                  {/* Video indicator */}
-                  {isVid && (
-                    <div className="absolute top-1 right-1 pointer-events-none">
-                      <div className="bg-black/60 rounded-full p-0.5">
-                        <Play className="w-3 h-3 text-white fill-white" />
-                      </div>
-                    </div>
-                  )}
-                  {/* Click to open modal */}
-                  <button
-                    className="absolute inset-0 z-10 cursor-pointer"
-                    onClick={(e) => { e.stopPropagation(); onOpenModal?.(post); }}
+                  <img
+                    src={post.imageUrl}
+                    alt=""
+                    className="w-full h-full object-cover"
+                    loading="lazy"
+                    referrerPolicy="no-referrer"
+                    onError={(e) => { e.currentTarget.style.display = "none"; }}
                   />
-                </div>
+                  <div className="absolute inset-0 bg-black/0 group-hover/thumb:bg-black/30 transition-colors flex items-center justify-center">
+                    {isVid && (
+                      <div className="absolute top-0.5 right-0.5 bg-black/60 rounded-full p-0.5">
+                        <Play className="w-2.5 h-2.5 text-white fill-white" />
+                      </div>
+                    )}
+                  </div>
+                  <div className="absolute bottom-0 left-0 right-0 bg-black/50 px-1 py-0.5 text-[9px] text-white flex items-center gap-1">
+                    {post.likes !== undefined && <span className="flex items-center gap-0.5"><Heart className="w-2 h-2 fill-current" />{formatCount(post.likes)}</span>}
+                    {post.views !== undefined && <span className="flex items-center gap-0.5"><Eye className="w-2 h-2" />{formatCount(post.views)}</span>}
+                  </div>
+                </button>
               );
             })}
+            {contentPosts.length > 4 && (
+              <div className="flex-shrink-0 w-20 h-20 bg-muted/50 rounded-lg flex items-center justify-center text-xs text-muted-foreground">
+                +{contentPosts.length - 4}
+              </div>
+            )}
           </div>
-        ) : (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground py-3 px-4 bg-muted/30 rounded-lg">
-            <ImageIcon className="w-4 h-4" />
-            콘텐츠 데이터가 없습니다. 추출을 다시 실행해주세요.
-          </div>
-        )}
-      </div>
-
-      {/* Detail Tabs: Brand Collaborations, Commerce, Analytics */}
-      <InfluencerDetailTabs influencerId={inf.id} />
+        </div>
+      )}
 
       {/* Raw data preview (collapsed by default) */}
       {raw && <RawDataPreview raw={raw} />}
