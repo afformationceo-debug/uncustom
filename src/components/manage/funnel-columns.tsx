@@ -11,13 +11,19 @@ import {
 import {
   FUNNEL_STATUSES, PLATFORMS, REPLY_CHANNELS, OUTREACH_TYPES, SHIPPING_CARRIERS,
   INFLUENCER_PAYMENT_STATUSES, CLIENT_PAYMENT_STATUSES,
-  getFunnelStatusLabel,
+  getFunnelStatusLabel, getFunnelNextAction,
 } from "@/types/platform";
+import type { FunnelStatus } from "@/types/platform";
 import { InlineCurrencyInput } from "./inline-currency-input";
 import { InlineSettlementEditor } from "./inline-settlement-editor";
 import { InlineInfluencerInfoEditor } from "./inline-influencer-info-editor";
 import { CrmRegistrationCell } from "./crm-register-dialog";
-import { Mail, Users, ExternalLink, StickyNote, BarChart3 } from "lucide-react";
+import {
+  Mail, Users, ExternalLink, StickyNote, BarChart3,
+  Send, Clock, CheckCircle, ThumbsUp, FileText as FileTextIcon,
+  Database as DatabaseIcon, Calendar, MapPin, Upload, AlertCircle,
+  CheckSquare, DollarSign, CheckCircle2, XCircle, ArrowRight,
+} from "lucide-react";
 import type { Tables, Json } from "@/types/database";
 
 type CampaignInfluencer = Tables<"campaign_influencers"> & {
@@ -233,6 +239,72 @@ export const ALL_COLUMNS: ColumnDef[] = [
           <div className="w-1.5 h-1.5 rounded-full shrink-0 mr-1" style={{ backgroundColor: current?.color }} />
           {label}
         </Badge>
+      );
+    },
+  },
+  {
+    key: "next_action",
+    label: "다음 액션",
+    group: "basic",
+    fixedWidth: 130,
+    render: (item) => {
+      const status = item.funnel_status as FunnelStatus;
+      const campaignType = (item.campaign as { campaign_type?: string } | undefined)?.campaign_type;
+      const action = getFunnelNextAction(status, campaignType);
+
+      // Terminal or fully settled — no action needed
+      if (status === "settled" || status === "declined" || status === "dropped") {
+        return <span className="text-[10px] text-muted-foreground">{action.label}</span>;
+      }
+
+      // Icon map
+      const iconMap: Record<string, React.ReactNode> = {
+        Send: <Send className="w-3 h-3" />,
+        Clock: <Clock className="w-3 h-3" />,
+        CheckCircle: <CheckCircle className="w-3 h-3" />,
+        ThumbsUp: <ThumbsUp className="w-3 h-3" />,
+        FileText: <FileTextIcon className="w-3 h-3" />,
+        Database: <DatabaseIcon className="w-3 h-3" />,
+        Calendar: <Calendar className="w-3 h-3" />,
+        MapPin: <MapPin className="w-3 h-3" />,
+        Upload: <Upload className="w-3 h-3" />,
+        AlertCircle: <AlertCircle className="w-3 h-3" />,
+        CheckSquare: <CheckSquare className="w-3 h-3" />,
+        DollarSign: <DollarSign className="w-3 h-3" />,
+        CheckCircle2: <CheckCircle2 className="w-3 h-3" />,
+        XCircle: <XCircle className="w-3 h-3" />,
+      };
+
+      const icon = iconMap[action.icon] ?? <ArrowRight className="w-3 h-3" />;
+
+      // Check staleness — contacted but no reply for 3+ days
+      let stale = false;
+      if (status === "contacted" && item.last_outreach_at) {
+        const daysSince = (Date.now() - new Date(item.last_outreach_at).getTime()) / 86400000;
+        if (daysSince >= 3) stale = true;
+      }
+      // Upload overdue
+      if (status === "upload_pending" && item.upload_deadline) {
+        if (new Date(item.upload_deadline) < new Date()) stale = true;
+      }
+      // Visit overdue
+      if (status === "visit_scheduled" && item.visit_scheduled_date) {
+        if (new Date(item.visit_scheduled_date) < new Date()) stale = true;
+      }
+
+      return (
+        <div
+          className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium whitespace-nowrap ${
+            stale
+              ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
+              : "bg-muted/80 text-foreground"
+          }`}
+          title={action.description}
+          style={!stale ? { color: action.color } : undefined}
+        >
+          {icon}
+          <span>{stale ? `⚠ ${action.label}` : action.label}</span>
+        </div>
       );
     },
   },

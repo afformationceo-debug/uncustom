@@ -15,7 +15,7 @@ import {
   Send,
   ClipboardList,
   Inbox,
-  Settings,
+  GitBranchPlus,
   FileVideo,
   Share2,
   BarChart3,
@@ -61,7 +61,7 @@ const communicationNav = [
 ];
 
 const managementNav = [
-  { name: "인플루언서 관리", href: "/manage", icon: Settings },
+  { name: "인플루언서 퍼널", href: "/manage", icon: GitBranchPlus },
   { name: "콘텐츠", href: "/contents", icon: FileVideo },
   { name: "SNS 계정", href: "/sns-accounts", icon: Share2 },
   { name: "성과", href: "/metrics", icon: BarChart3 },

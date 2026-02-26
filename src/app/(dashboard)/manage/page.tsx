@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { useRealtime } from "@/hooks/use-realtime";
-import { LayoutGrid } from "lucide-react";
+import { GitBranchPlus } from "lucide-react";
 import type { Tables } from "@/types/database";
 import type { ColumnGroup } from "@/components/manage/funnel-columns";
 import { getDefaultGroups, migrateColumnGroups } from "@/components/manage/funnel-columns";
@@ -307,11 +307,11 @@ function ManagePageContent() {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-lg font-bold flex items-center gap-2">
-            <LayoutGrid className="w-4 h-4" />
-            인플루언서 관리
+            <GitBranchPlus className="w-4 h-4" />
+            인플루언서 퍼널
           </h2>
           <p className="text-xs text-muted-foreground">
-            {campaignId ? `캠페인별 퍼널 관리${typeLabel}` : "전체 캠페인 통합 관리"}
+            {campaignId ? `캠페인별 퍼널 관리${typeLabel}` : "전체 캠페인 통합 퍼널"}
             {total > 0 && ` — ${total.toLocaleString()}명`}
           </p>
         </div>

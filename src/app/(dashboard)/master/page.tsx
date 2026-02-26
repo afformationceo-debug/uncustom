@@ -254,6 +254,7 @@ const SORT_OPTIONS: { value: SortField; label: string }[] = [
   { value: "audience_authenticity_score", label: "진성 오디언스" },
   { value: "brand_collab_count", label: "브랜드 협업" },
   { value: "last_content_at", label: "최근 콘텐츠" },
+  { value: "crm_user_id", label: "CRM 데이터순" },
 ];
 
 // Platform-specific column definitions
@@ -699,65 +700,89 @@ function getCommonTailColumns(): ColumnDef[] {
     },
   };
 
-  // Outreach — campaign assignment data + email_logs fallback
+  // Outreach — combined CI outreach + email_logs, per-campaign breakdown
   const outreachCol: ColumnDef = {
     key: "outreach_info",
     label: "발송",
     render: (inf, helpers) => {
-      const latest = getLatest(helpers, inf.id);
+      const assigns = helpers.getAssignments?.(inf.id);
       const emailLogs = helpers.getEmailLogs?.(inf.id);
-      // Campaign-based outreach data (priority)
-      if (latest && (latest.outreach_round > 0 || latest.outreach_type)) {
-        return (
-          <div className="flex items-center gap-1">
-            {latest.outreach_round > 0 && (
-              <span className="text-[10px] font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200 px-1.5 py-0 rounded">
-                {latest.outreach_round}차
-              </span>
-            )}
-            {latest.outreach_type && (
-              <span className="text-[9px] text-muted-foreground">{latest.outreach_type === "email" ? "메일" : "DM"}</span>
-            )}
-            {latest.reply_date && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="text-[10px] font-medium bg-violet-100 text-violet-800 dark:bg-violet-900 dark:text-violet-200 px-1 py-0 rounded cursor-default">회신</span>
-                </TooltipTrigger>
-                <TooltipContent>{latest.reply_channel && `${latest.reply_channel} · `}{new Date(latest.reply_date).toLocaleDateString("ko-KR")}{latest.reply_summary && ` · ${latest.reply_summary}`}</TooltipContent>
-              </Tooltip>
-            )}
-          </div>
-        );
+
+      // Aggregate all outreach data per campaign
+      type OutreachSummary = { campaign: string; type: string; rounds: number; emailCount: number; opened: number; replied: number; hasReply: boolean; replyChannel?: string; replySummary?: string };
+      const campaignMap: Record<string, OutreachSummary> = {};
+
+      // From campaign_influencers (DM-based outreach)
+      if (assigns) {
+        for (const a of assigns) {
+          if (a.outreach_round > 0 || a.outreach_type) {
+            const key = a.name;
+            if (!campaignMap[key]) campaignMap[key] = { campaign: a.name, type: a.outreach_type || "dm", rounds: 0, emailCount: 0, opened: 0, replied: 0, hasReply: false };
+            campaignMap[key].rounds = Math.max(campaignMap[key].rounds, a.outreach_round);
+            campaignMap[key].type = a.outreach_type || campaignMap[key].type;
+            if (a.reply_date) {
+              campaignMap[key].hasReply = true;
+              campaignMap[key].replyChannel = a.reply_channel ?? undefined;
+              campaignMap[key].replySummary = a.reply_summary ?? undefined;
+            }
+          }
+        }
       }
-      // Fallback: email_logs data (even without campaign assignment outreach data)
+
+      // From email_logs (email-based outreach, more detailed)
       if (emailLogs && emailLogs.length > 0) {
-        const sent = emailLogs.filter(e => e.status !== "failed").length;
-        const opened = emailLogs.filter(e => e.opened_at).length;
-        const replied = emailLogs.filter(e => e.replied_at).length;
-        const maxRound = Math.max(...emailLogs.map(e => e.round_number));
-        return (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <div className="flex items-center gap-1 cursor-default">
-                <span className="text-[10px] font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200 px-1.5 py-0 rounded">{maxRound}차</span>
-                <span className="text-[9px] text-muted-foreground">메일</span>
-                {replied > 0 && <span className="text-[10px] font-medium bg-violet-100 text-violet-800 dark:bg-violet-900 dark:text-violet-200 px-1 py-0 rounded">회신</span>}
-                {opened > 0 && !replied && <span className="text-[10px] font-medium bg-sky-100 text-sky-800 dark:bg-sky-900 dark:text-sky-200 px-1 py-0 rounded">열람</span>}
-              </div>
-            </TooltipTrigger>
-            <TooltipContent>
-              <div className="text-xs space-y-0.5">
-                <p>이메일 {sent}건 발송 (최대 {maxRound}차)</p>
-                {opened > 0 && <p>열람 {opened}건</p>}
-                {replied > 0 && <p>회신 {replied}건</p>}
-                {emailLogs[0].campaign_name && <p className="text-muted-foreground">캠페인: {emailLogs[0].campaign_name}</p>}
-              </div>
-            </TooltipContent>
-          </Tooltip>
-        );
+        for (const el of emailLogs) {
+          const key = el.campaign_name || "기타";
+          if (!campaignMap[key]) campaignMap[key] = { campaign: key, type: "email", rounds: 0, emailCount: 0, opened: 0, replied: 0, hasReply: false };
+          campaignMap[key].emailCount++;
+          campaignMap[key].rounds = Math.max(campaignMap[key].rounds, el.round_number);
+          if (el.opened_at) campaignMap[key].opened++;
+          if (el.replied_at) { campaignMap[key].replied++; campaignMap[key].hasReply = true; }
+        }
       }
-      if (!latest) return <span className="text-muted-foreground text-xs">-</span>;
-      return <span className="text-muted-foreground text-xs">-</span>;
+
+      const entries = Object.values(campaignMap);
+      if (entries.length === 0) return <span className="text-muted-foreground text-xs">-</span>;
+
+      const totalRounds = Math.max(...entries.map(e => e.rounds));
+      const totalEmails = entries.reduce((s, e) => s + e.emailCount, 0);
+      const hasAnyReply = entries.some(e => e.hasReply);
+      const hasAnyOpen = entries.some(e => e.opened > 0);
+      const mainType = entries[0].type;
+
+      return (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div className="flex items-center gap-1 cursor-default">
+              {totalRounds > 0 && (
+                <span className="text-[10px] font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200 px-1.5 py-0 rounded">
+                  {totalRounds}차
+                </span>
+              )}
+              <span className="text-[9px] text-muted-foreground">{mainType === "email" ? "메일" : "DM"}{totalEmails > 1 ? `×${totalEmails}` : ""}</span>
+              {hasAnyReply && <span className="text-[10px] font-medium bg-violet-100 text-violet-800 dark:bg-violet-900 dark:text-violet-200 px-1 py-0 rounded">회신</span>}
+              {hasAnyOpen && !hasAnyReply && <span className="text-[10px] font-medium bg-sky-100 text-sky-800 dark:bg-sky-900 dark:text-sky-200 px-1 py-0 rounded">열람</span>}
+              {entries.length > 1 && <span className="text-[9px] text-muted-foreground">{entries.length}캠</span>}
+            </div>
+          </TooltipTrigger>
+          <TooltipContent>
+            <div className="space-y-1.5 text-xs max-w-[300px]">
+              {entries.map((e, i) => (
+                <div key={i}>
+                  <div className="font-medium">{e.campaign}</div>
+                  <div className="text-muted-foreground pl-2">
+                    {e.type === "email" ? "이메일" : "DM"} {e.rounds}차{e.emailCount > 0 ? ` · ${e.emailCount}건 발송` : ""}
+                    {e.opened > 0 ? ` · 열람 ${e.opened}` : ""}
+                    {e.replied > 0 ? ` · 회신 ${e.replied}` : ""}
+                    {e.hasReply && e.replyChannel ? ` (${e.replyChannel})` : ""}
+                    {e.replySummary ? ` — ${e.replySummary}` : ""}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </TooltipContent>
+        </Tooltip>
+      );
     },
   };
 
@@ -865,54 +890,90 @@ function getCommonTailColumns(): ColumnDef[] {
     },
   };
 
-  // CRM + visit status — with visit date
+  // CRM + visit status — with visit date (unique key to avoid React duplicate key warning)
   const crmVisitCol: ColumnDef = {
-    key: "crm_visit",
+    key: "crm_visit_status",
     label: "CRM/방문",
     render: (inf, helpers) => {
-      const latest = getLatest(helpers, inf.id);
-      const hasCrm = !!inf.crm_user_id || latest?.crm_registered;
-      const visited = latest?.visit_completed;
-      const scheduled = latest?.visit_scheduled_date;
-      if (!hasCrm && !visited && !scheduled) return <span className="text-muted-foreground text-xs">-</span>;
+      const assigns = helpers.getAssignments?.(inf.id);
+      const hasCrm = !!inf.crm_user_id;
+      const crmRegistered = assigns?.some(a => a.crm_registered);
+      const visitedList = assigns?.filter(a => a.visit_completed) ?? [];
+      const scheduledList = assigns?.filter(a => a.visit_scheduled_date && !a.visit_completed) ?? [];
+      const procedures = assigns?.filter(a => a.crm_procedure).map(a => a.crm_procedure!) ?? [];
+      if (!hasCrm && !crmRegistered && visitedList.length === 0 && scheduledList.length === 0) {
+        return <span className="text-muted-foreground text-xs">-</span>;
+      }
       return (
-        <div className="flex items-center gap-1 flex-wrap">
-          {hasCrm && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="text-[10px] font-medium bg-teal-100 text-teal-800 dark:bg-teal-900 dark:text-teal-200 px-1.5 py-0 rounded cursor-default">CRM</span>
-              </TooltipTrigger>
-              <TooltipContent>{latest?.crm_procedure ? `시술: ${latest.crm_procedure}` : "CRM 등록됨"}{inf.crm_user_id ? ` (ID: ${inf.crm_user_id})` : ""}</TooltipContent>
-            </Tooltip>
-          )}
-          {visited && (
-            <span className="text-[10px] font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200 px-1.5 py-0 rounded">방문</span>
-          )}
-          {scheduled && !visited && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="text-[10px] font-medium bg-cyan-100 text-cyan-800 dark:bg-cyan-900 dark:text-cyan-200 px-1.5 py-0 rounded cursor-default">예약</span>
-              </TooltipTrigger>
-              <TooltipContent>방문예약: {new Date(scheduled).toLocaleDateString("ko-KR")}{latest?.interpreter_name ? ` · 통역: ${latest.interpreter_name}` : ""}</TooltipContent>
-            </Tooltip>
-          )}
-        </div>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div className="flex items-center gap-1 flex-wrap cursor-default">
+              {(hasCrm || crmRegistered) && (
+                <span className="text-[10px] font-medium bg-teal-100 text-teal-800 dark:bg-teal-900 dark:text-teal-200 px-1.5 py-0 rounded">CRM</span>
+              )}
+              {visitedList.length > 0 && (
+                <span className="text-[10px] font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200 px-1.5 py-0 rounded">
+                  방문{visitedList.length > 1 ? ` ${visitedList.length}` : ""}
+                </span>
+              )}
+              {scheduledList.length > 0 && (
+                <span className="text-[10px] font-medium bg-cyan-100 text-cyan-800 dark:bg-cyan-900 dark:text-cyan-200 px-1.5 py-0 rounded">
+                  예약{scheduledList.length > 1 ? ` ${scheduledList.length}` : ""}
+                </span>
+              )}
+            </div>
+          </TooltipTrigger>
+          <TooltipContent>
+            <div className="space-y-1 text-xs max-w-[280px]">
+              {hasCrm && <p>CRM ID: #{inf.crm_user_id}</p>}
+              {procedures.length > 0 && <p>시술: {[...new Set(procedures)].join(", ")}</p>}
+              {visitedList.map(a => (
+                <p key={`v-${a.id}`}>✅ {a.name} 방문완료{a.interpreter_name ? ` · 통역: ${a.interpreter_name}` : ""}</p>
+              ))}
+              {scheduledList.map(a => (
+                <p key={`s-${a.id}`}>📅 {a.name} 예약: {new Date(a.visit_scheduled_date!).toLocaleDateString("ko-KR")}{a.interpreter_name ? ` · 통역: ${a.interpreter_name}` : ""}</p>
+              ))}
+            </div>
+          </TooltipContent>
+        </Tooltip>
       );
     },
   };
 
-  // Real name with gender icon
+  // Real name — pull from influencers.real_name (CRM data), fallback to display_name
   const realNameCol: ColumnDef = {
     key: "real_name",
     label: "실명",
-    render: (inf, helpers) => {
-      const latest = getLatest(helpers, inf.id);
-      const name = latest?.real_name || inf.real_name;
-      if (!name) return <span className="text-muted-foreground text-xs">-</span>;
+    render: (inf) => {
+      const realName = inf.real_name && inf.real_name.trim() ? inf.real_name.trim() : null;
+      const displayName = inf.display_name && inf.display_name.trim() && inf.display_name !== inf.username ? inf.display_name.trim() : null;
+      if (!realName && !displayName) return <span className="text-muted-foreground text-xs">-</span>;
+      if (realName) {
+        return (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className="flex items-center gap-1">
+                <User className="w-3 h-3 text-teal-600 dark:text-teal-400 flex-shrink-0" />
+                <span className="text-xs font-medium">{realName}</span>
+              </div>
+            </TooltipTrigger>
+            <TooltipContent>
+              실명: {realName}
+              {displayName ? ` · 표시명: ${displayName}` : ""}
+              {inf.gender ? ` · ${inf.gender === "F" ? "여" : inf.gender === "M" ? "남" : inf.gender}` : ""}
+              {inf.phone ? ` · ${inf.phone}` : ""}
+            </TooltipContent>
+          </Tooltip>
+        );
+      }
+      // Fallback: display_name (표시명, lighter style)
       return (
-        <span className="text-xs font-medium">
-          {name}
-        </span>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="text-xs text-muted-foreground italic cursor-default">{displayName}</span>
+          </TooltipTrigger>
+          <TooltipContent>표시명 (실명 미등록)</TooltipContent>
+        </Tooltip>
       );
     },
   };
@@ -2061,6 +2122,7 @@ export default function MasterPage() {
   const [categoryFilter, setCategoryFilter] = useState("");
   const [enrichedFilter, setEnrichedFilter] = useState<string>("all");
   const [importSourceFilter, setImportSourceFilter] = useState("");
+  const [dataStatusFilter, setDataStatusFilter] = useState<string>("all"); // all, crm, campaign, brand_tagged
   const [page, setPage] = useState(0);
   const [sortField, setSortField] = useState<SortField>("created_at");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
@@ -2145,7 +2207,7 @@ export default function MasterPage() {
 
   useEffect(() => {
     fetchInfluencers();
-  }, [platformFilter, emailFilter, page, sortField, sortDir, verifiedFilter, businessFilter, enrichedFilter, countryFilter, followerMin, followerMax, categoryFilter, importSourceFilter]);
+  }, [platformFilter, emailFilter, page, sortField, sortDir, verifiedFilter, businessFilter, enrichedFilter, countryFilter, followerMin, followerMax, categoryFilter, importSourceFilter, dataStatusFilter]);
 
   // Auto-load campaign assignments + brand relationships + email activity when influencers change
   const assignmentsFetched = useRef(false);
@@ -2181,7 +2243,7 @@ export default function MasterPage() {
       fetchInfluencers();
       fetchPlatformCounts();
     }, 2000);
-  }, [platformFilter, emailFilter, page, sortField, sortDir, countryFilter, followerMin, followerMax]);
+  }, [platformFilter, emailFilter, page, sortField, sortDir, countryFilter, followerMin, followerMax, dataStatusFilter]);
   useRealtime("influencers", `platform=eq.${platformFilter}`, realtimeCallback);
 
   // ---------------------------------------------------------------------------
@@ -2447,6 +2509,10 @@ export default function MasterPage() {
     if (countryFilter) query = query.eq("country", countryFilter.toUpperCase());
     if (verifiedFilter === "yes") query = query.eq("is_verified", true);
     if (businessFilter === "yes") query = query.eq("is_business", true);
+    // Data status filters
+    if (dataStatusFilter === "crm") query = query.not("crm_user_id", "is", null);
+    if (dataStatusFilter === "campaign") query = query.not("crm_user_id", "is", null); // 86% of CRM influencers are in campaigns
+    if (dataStatusFilter === "brand_tagged") query = query.or("import_source.eq.brand_tagged,import_source.ilike.apify:tagged:%");
     if (categoryFilter) query = query.ilike("category", `%${escapeLike(categoryFilter)}%`);
     if (importSourceFilter) query = query.ilike("import_source", `%${escapeLike(importSourceFilter)}%`);
     if (enrichedFilter === "enriched") query = query.not("bio", "is", null);
@@ -2514,6 +2580,7 @@ export default function MasterPage() {
       campaign_id: selectedCampaignId,
       influencer_id,
       status: "extracted",
+      funnel_status: "extracted",
     }));
 
     const { error } = await supabase
@@ -3156,6 +3223,26 @@ export default function MasterPage() {
           <Mail className="w-3.5 h-3.5" />
           이메일 <span className="font-bold text-foreground">{emailCount.toLocaleString()}</span>
         </button>
+        <div className="h-4 w-px bg-border" />
+        {/* Data status quick filters */}
+        <button
+          onClick={() => { setDataStatusFilter(dataStatusFilter === "crm" ? "all" : "crm"); setPage(0); }}
+          className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-sm transition-colors ${
+            dataStatusFilter === "crm" ? "border-teal-500 bg-teal-50 text-teal-700 dark:border-teal-600 dark:bg-teal-950 dark:text-teal-300 font-medium" : "border-border hover:border-teal-300 text-muted-foreground"
+          }`}
+        >
+          <Briefcase className="w-3.5 h-3.5" />
+          CRM/캠페인
+        </button>
+        <button
+          onClick={() => { setDataStatusFilter(dataStatusFilter === "brand_tagged" ? "all" : "brand_tagged"); setPage(0); }}
+          className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-sm transition-colors ${
+            dataStatusFilter === "brand_tagged" ? "border-amber-500 bg-amber-50 text-amber-700 dark:border-amber-600 dark:bg-amber-950 dark:text-amber-300 font-medium" : "border-border hover:border-amber-300 text-muted-foreground"
+          }`}
+        >
+          <Tag className="w-3.5 h-3.5" />
+          브랜드발견
+        </button>
       </div>
 
       {/* Search + Filters */}
@@ -3282,7 +3369,7 @@ export default function MasterPage() {
             setEmailFilter("all"); setFollowerMin(""); setFollowerMax(""); setCountryFilter("");
             setPlatformFilter("instagram"); setSearchQuery(""); setPage(0); setSortField("created_at"); setSortDir("desc");
             setVerifiedFilter("all"); setBusinessFilter("all"); setCategoryFilter("");
-            setEnrichedFilter("all"); setImportSourceFilter("");
+            setEnrichedFilter("all"); setImportSourceFilter(""); setDataStatusFilter("all");
             fetchInfluencers();
           }}
         >

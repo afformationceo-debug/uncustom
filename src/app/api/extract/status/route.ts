@@ -312,6 +312,7 @@ async function handleExtractionResults(
                 campaign_id: job.campaign_id,
                 influencer_id: justInserted.id,
                 status: "extracted",
+                funnel_status: "extracted",
               }, { onConflict: "campaign_id,influencer_id" });
           }
         }
@@ -328,6 +329,7 @@ async function handleExtractionResults(
               campaign_id: job.campaign_id,
               influencer_id: newInf.id,
               status: "extracted",
+              funnel_status: "extracted",
             }, { onConflict: "campaign_id,influencer_id" });
         }
 
@@ -480,6 +482,7 @@ async function handleExtractionResults(
             campaign_id: job.campaign_id,
             influencer_id: existingInf.id,
             status: "extracted",
+            funnel_status: "extracted",
           }, { onConflict: "campaign_id,influencer_id" });
       }
 
